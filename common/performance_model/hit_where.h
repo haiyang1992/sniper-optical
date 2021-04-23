@@ -17,6 +17,7 @@ class HitWhere
          L2_OWN = MemComponent::L2_CACHE,
          L3_OWN = MemComponent::L3_CACHE,
          L4_OWN = MemComponent::L4_CACHE,
+         WRITE_QUEUE,
          MISS,
          NUCA_CACHE,
          DRAM_CACHE,

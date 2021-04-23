@@ -19,6 +19,7 @@ class ShmemPerf
          REMOTE_CACHE_FWD,
          REMOTE_CACHE_WB,
          PENDING_HIT,
+         WRITE_QUEUE,
          NUCA_TAGS,
          NUCA_QUEUE,
          NUCA_BUS,
