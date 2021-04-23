@@ -32,7 +32,8 @@ core_id_t AddressHomeLookup::getHome(IntPtr address) const
    LOG_ASSERT_ERROR(0 <= module_num && module_num < (SInt32) m_total_modules, "module_num(%i), total_modules(%u)", module_num, m_total_modules);
 
    LOG_PRINT("address(0x%x), module_num(%i)", address, module_num);
-   return (m_core_list[module_num]);
+   return 0;
+   // return (m_core_list[module_num]);
 }
 
 IntPtr AddressHomeLookup::getLinearBlock(IntPtr address) const
@@ -42,5 +43,6 @@ IntPtr AddressHomeLookup::getLinearBlock(IntPtr address) const
 
 IntPtr AddressHomeLookup::getLinearAddress(IntPtr address) const
 {
-   return (getLinearBlock(address) << m_ahl_param) | (address & m_ahl_mask);
+   return address;
+   // return (getLinearBlock(address) << m_ahl_param) | (address & m_ahl_mask);
 }

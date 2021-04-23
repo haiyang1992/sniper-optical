@@ -97,6 +97,8 @@ namespace PrL1PrL2DramDirectoryMSI
          case UPGRADE_REQ:
          case INV_REP:
          case DRAM_READ_REQ:
+         // Drake: inclusion
+         case DUMMY:
             // msg_type + address
             // msg_type - 1 byte
             return (1 + sizeof(IntPtr));
@@ -107,6 +109,8 @@ namespace PrL1PrL2DramDirectoryMSI
          case WB_REP:
          case DRAM_WRITE_REQ:
          case DRAM_READ_REP:
+         // Drake: inclusion
+         case CLEAN_EVICT_TO_NUCA:
             // msg_type + address + cache_block
             return (1 + sizeof(IntPtr) + m_data_length);
 

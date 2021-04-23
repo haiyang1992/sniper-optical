@@ -10,7 +10,7 @@ NetworkModelMagic::NetworkModelMagic(Network *net, EStaticNetwork net_type) :
    _enabled(false),
    _num_packets(0),
    _num_bytes(0),
-   _latency(Sim()->getDvfsManager()->getCoreDomain(getNetwork()->getCore()->getId()), 1)
+   _latency(Sim()->getDvfsManager()->getCoreDomain(getNetwork()->getCore()->getId()), 0)
 { }
 
 void

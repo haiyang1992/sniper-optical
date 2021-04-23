@@ -159,8 +159,9 @@ CacheCntlr::CacheCntlr(MemComponent::component_t mem_component,
 
    LOG_ASSERT_ERROR(!Sim()->getCfg()->hasKey("perf_model/perfect_llc"),
                     "perf_model/perfect_llc is deprecated, use perf_model/lX_cache/perfect instead");
-   if (is_last_level_cache)
-      LOG_ASSERT_ERROR(m_passthrough == false, "Cache pass-through not supported on last-level cache");
+   // Drake: inlusion
+   // if (is_last_level_cache)
+   //    LOG_ASSERT_ERROR(m_passthrough == false, "Cache pass-through not supported on last-level cache");
 
    if (isMasterCache())
    {
@@ -367,7 +368,17 @@ LOG_ASSERT_ERROR(offset + data_length <= getCacheBlockSize(), "access until %u >
    SubsecondTime t_start = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
 
    CacheBlockInfo *cache_block_info;
-   bool cache_hit = operationPermissibleinCache(ca_address, mem_op_type, &cache_block_info), prefetch_hit = false;
+   // Drake: inclusion
+   bool cache_hit, prefetch_hit;
+   if (m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough())
+   {
+      cache_hit = L1operationPermissibleinCache(ca_address, mem_op_type, &cache_block_info);
+   }
+   else
+   {
+      cache_hit = operationPermissibleinCache(ca_address, mem_op_type, &cache_block_info);
+   }
+   prefetch_hit = false;
 
    if (!cache_hit && m_perfect)
    {
@@ -516,8 +527,10 @@ MYLOG("processMemOpFromCore l%d got message reply", m_mem_component);
 MYLOG("processMemOpFromCore l%d before next fill", m_mem_component);
          hit_where = m_next_cache_cntlr->processShmemReqFromPrevCache(this, mem_op_type, ca_address, false, false, Prefetch::NONE, t_start, true);
 MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
-         LOG_ASSERT_ERROR(hit_where != HitWhere::MISS,
-            "Tried to read in next-level cache, but data is already gone");
+         // Drake: inclusion:
+         // prevent this error when doing a silent upgrade, may suppress other errors
+         // LOG_ASSERT_ERROR(hit_where != HitWhere::MISS,
+         //    "Tried to read in next-level cache, but data is already gone");
 
          #ifdef PRIVATE_L2_OPTIMIZATION
          releaseStackLock(ca_address, true);
@@ -528,6 +541,12 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
       /* data should now be in next-level cache, go get it */
       SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
       copyDataFromNextLevel(mem_op_type, ca_address, modeled, t_now);
+      // Drake: inclusion
+      // invalidate the block after we have the data
+      if (m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough())
+      {
+         m_next_cache_cntlr->getCacheBlockInfo(ca_address)->setCState(CacheState::INVALID);
+      }
 
       cache_block_info = getCacheBlockInfo(ca_address);
 
@@ -537,8 +556,15 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
          releaseStackLock(ca_address, true);
       #endif
 
-      LOG_ASSERT_ERROR(operationPermissibleinCache(ca_address, mem_op_type),
+      // Drake: inclusion
+      if (m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough()){
+         LOG_ASSERT_ERROR(L1operationPermissibleinCache(ca_address, mem_op_type),
          "Expected %x to be valid in L1", ca_address);
+      }
+      else{
+         LOG_ASSERT_ERROR(operationPermissibleinCache(ca_address, mem_op_type),
+            "Expected %x to be valid in L1", ca_address);
+      }
 
 
       if (modeled && m_l1_mshr && !m_passthrough)
@@ -807,7 +833,9 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
       else
          cache_block_info = insertCacheBlock(address, mem_op_type == Core::READ ? CacheState::SHARED : CacheState::MODIFIED, NULL, m_core_id, ShmemPerfModel::_USER_THREAD);
    }
-   else if (cache_hit && m_passthrough && count)
+   // Drake: inclusion
+   // make sure this doesn't run when we set LLC to passthrough
+   else if (cache_hit && m_passthrough && count && !isLastLevel())
    {
       // Passthrough == false: cache that always misses (except in the L1 fill path, detected by count==false, where it should return the data)
       cache_hit = first_hit = false;
@@ -979,9 +1007,22 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
             #endif
 
             cache_hit = true;
-            hit_where = HitWhere::where_t(m_mem_component);
+            // Drake: inclusion
+            // this should not change to the current level if it is passthrough, but remain original source since we don't ever expect to hit here
+            if (!m_passthrough)
+            {
+               hit_where = HitWhere::where_t(m_mem_component);
+            }
             MYLOG("Silent upgrade from E -> M for address %lx", address);
             cache_block_info->setCState(CacheState::MODIFIED);
+            // Drake: inclusion
+            // still set hit_where according to downstream, otherwise it's a miss
+            if (m_passthrough && m_last_remote_hit_where != HitWhere::UNKNOWN)
+            {
+               // handleMsgFromDramDirectory just provided us with the data. Its source was left in m_last_remote_hit_where
+               hit_where = m_last_remote_hit_where;
+               m_last_remote_hit_where = HitWhere::UNKNOWN;
+            }
          }
          else if (m_master->m_dram_cntlr)
          {
@@ -992,7 +1033,12 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
                // We already have the line: it must have been SHARED and this is a write (else there wouldn't have been a miss)
                // Upgrade silently
                cache_block_info->setCState(CacheState::MODIFIED);
-               hit_where = HitWhere::where_t(m_mem_component);
+               // Drake: inclusion
+               // this should not change to the current level if it is passthrough, but remain original source since we don't ever expect to hit here
+               if (!m_passthrough)
+               {
+                  hit_where = HitWhere::where_t(m_mem_component);
+               }
             }
             else
             {
@@ -1169,6 +1215,11 @@ CacheCntlr::initiateDirectoryAccess(Core::mem_op_t mem_op_type, IntPtr address, 
          first = true;
    }
 
+   // Drake: inclusion
+   // should not count on others bringing the same line to LLC since LLC is passthrough, whatever gets written in the LLC gets invalidated immediately
+   if (m_passthrough)
+      first = true;
+
    if (first)
    {
       m_shmem_perf->reset(getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD), m_core_id);
@@ -1290,6 +1341,38 @@ CacheCntlr::operationPermissibleinCache(
    return cache_hit;
 }
 
+// Drake: inclusion
+bool
+CacheCntlr::L1operationPermissibleinCache(
+      IntPtr address, Core::mem_op_t mem_op_type, CacheBlockInfo **cache_block_info)
+{
+   CacheBlockInfo *block_info = getCacheBlockInfo(address);
+   if (cache_block_info != NULL)
+      *cache_block_info = block_info;
+
+   bool cache_hit = false;
+   CacheState::cstate_t cstate = getCacheState(block_info);
+
+   switch (mem_op_type)
+   {
+      case Core::READ:
+         cache_hit = CacheState(cstate).readable();
+         break;
+
+      case Core::READ_EX:
+      case Core::WRITE:
+         cache_hit = (cstate == CacheState::MODIFIED || cstate == CacheState::EXCLUSIVE);
+         break;
+
+      default:
+         LOG_PRINT_ERROR("Unsupported mem_op_type: %u", mem_op_type);
+         break;
+   }
+
+   MYLOG("address %lx state %c: permissible %d", address, CStateString(cstate), cache_hit);
+   return cache_hit;
+}
+
 
 void
 CacheCntlr::accessCache(
@@ -1365,7 +1448,8 @@ CacheCntlr::invalidateCacheBlock(IntPtr address)
 
    m_master->m_cache->invalidateSingleLine(address);
 
-   if (m_next_cache_cntlr)
+   // Drake: inclusion
+   if (m_next_cache_cntlr && !m_next_cache_cntlr->isPassthrough())
       m_next_cache_cntlr->notifyPrevLevelEvict(m_core_id_master, m_mem_component, address);
 
    MYLOG("%lx %c > %c", address, CStateString(old_cstate), CStateString(getCacheState(address)));
@@ -1447,7 +1531,9 @@ MYLOG("evicting @%lx", evict_address);
          instead of an address, and with a message to the directory at the end. Merge? */
 
       LOG_PRINT("Eviction: addr(0x%x)", evict_address);
-      if (! m_master->m_prev_cache_cntlrs.empty()) {
+      // Drake: inclusion
+      // evicting upper cache levels not needed unless we have a normal LLC
+      if (!m_passthrough && ! m_master->m_prev_cache_cntlrs.empty()) {
          ScopedLock sl(getLock());
          /* propagate the update to the previous levels. they will write modified data back to our evict buffer when needed */
          m_master->m_evicting_address = evict_address;
@@ -1473,7 +1559,9 @@ MYLOG("evicting @%lx", evict_address);
       {
          // Don't notify the next level, it may have already evicted the line itself and won't like our notifyPrevLevelEvict
          // Make sure the line wasn't modified though (unless we're writethrough), else data would have been lost
-         if (!m_cache_writethrough)
+         // Drake: inclusion
+         // we do not need worry about this
+         if (!m_passthrough && !m_cache_writethrough)
             LOG_ASSERT_ERROR(evict_block_info.getCState() != CacheState::MODIFIED, "Non-coherent cache is throwing away dirty data");
       }
       else if (m_next_cache_cntlr)
@@ -1482,10 +1570,48 @@ MYLOG("evicting @%lx", evict_address);
             /* If we're a write-through cache the new data is in the next level already */
          } else {
             /* Send dirty block to next level cache. Probably we have an evict/victim buffer to do that when we're idle, so ignore timing */
-            if (evict_block_info.getCState() == CacheState::MODIFIED)
-               m_next_cache_cntlr->writeCacheBlock(evict_address, 0, evict_buf, getCacheBlockSize(), thread_num);
+
+            // Drake: inclusion
+            // should only be here if we are L1 (not LLC in 2+ levels of cache)
+
+            // original path
+            if (!m_next_cache_cntlr->isPassthrough())
+            {
+               if (evict_block_info.getCState() == CacheState::MODIFIED)
+               {
+                  m_next_cache_cntlr->writeCacheBlock(evict_address, 0, evict_buf, getCacheBlockSize(), thread_num);
+               }
+            }
+            else
+            {
+                // Send straight to the nuca via the DRAM interface
+               if (evict_block_info.getCState() == CacheState::MODIFIED){
+                  MYLOG("evict FLUSH %lx", evict_address);
+                  getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::FLUSH_REP,
+                     MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+                     m_core_id /* requester */,
+                     getHome(evict_address) /* receiver */,
+                     evict_address,
+                     evict_buf, getCacheBlockSize(),
+                     HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
+               }
+               else
+               {
+                  MYLOG("evict CLEAN EVICT to NUCA %lx", evict_address);
+                  getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::CLEAN_EVICT_TO_NUCA,
+                  MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+                  m_core_id /* requester */,
+                  getHome(evict_address) /* receiver */,
+                  evict_address,
+                  evict_buf, getCacheBlockSize(),
+                  HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
+               }
+            }
          }
-         m_next_cache_cntlr->notifyPrevLevelEvict(m_core_id_master, m_mem_component, evict_address);
+         // Drake: inclusion
+         // only do this if we do not have a passthrough LLC
+         if (!m_next_cache_cntlr->isPassthrough())
+            m_next_cache_cntlr->notifyPrevLevelEvict(m_core_id_master, m_mem_component, evict_address);
       }
       else if (m_master->m_dram_cntlr)
       {
@@ -1516,37 +1642,44 @@ MYLOG("evicting @%lx", evict_address);
       }
       else
       {
-         /* Send dirty block to directory */
-         UInt32 home_node_id = getHome(evict_address);
-         if (evict_block_info.getCState() == CacheState::MODIFIED)
+         // Drake: inclusion
+         // we should only be here if we are L2 or lower, L1 should already have evicted this, so do nothing if we are passthrough
+         if (!m_passthrough)
          {
-            // Send back the data also
-MYLOG("evict FLUSH %lx", evict_address);
-            getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::FLUSH_REP,
-                  MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
-                  m_core_id /* requester */,
-                  home_node_id /* receiver */,
-                  evict_address,
-                  evict_buf, getCacheBlockSize(),
-                  HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
-         }
-         else
-         {
-MYLOG("evict INV %lx", evict_address);
-            LOG_ASSERT_ERROR(evict_block_info.getCState() == CacheState::SHARED || evict_block_info.getCState() == CacheState::EXCLUSIVE,
-                  "evict_address(0x%x), evict_state(%u)",
-                  evict_address, evict_block_info.getCState());
-            getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::INV_REP,
-                  MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
-                  m_core_id /* requester */,
-                  home_node_id /* receiver */,
-                  evict_address,
-                  NULL, 0,
-                  HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
+            /* Send dirty block to directory */
+            UInt32 home_node_id = getHome(evict_address);
+            if (evict_block_info.getCState() == CacheState::MODIFIED)
+            {
+               // Send back the data also
+   MYLOG("evict FLUSH %lx", evict_address);
+               getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::FLUSH_REP,
+                     MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+                     m_core_id /* requester */,
+                     home_node_id /* receiver */,
+                     evict_address,
+                     evict_buf, getCacheBlockSize(),
+                     HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
+            }
+            else
+            {
+   MYLOG("evict INV %lx", evict_address);
+               LOG_ASSERT_ERROR(evict_block_info.getCState() == CacheState::SHARED || evict_block_info.getCState() == CacheState::EXCLUSIVE,
+                     "evict_address(0x%x), evict_state(%u)",
+                     evict_address, evict_block_info.getCState());
+               getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::INV_REP,
+                     MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+                     m_core_id /* requester */,
+                     home_node_id /* receiver */,
+                     evict_address,
+                     NULL, 0,
+                     HitWhere::UNKNOWN, &m_dummy_shmem_perf, thread_num);
+            }
          }
       }
 
-      LOG_ASSERT_ERROR(getCacheState(evict_address) == CacheState::INVALID, "Evicted address did not become invalid, now in state %s", CStateString(getCacheState(evict_address)));
+      // Drake: inclusion
+      if (m_next_cache_cntlr && !m_next_cache_cntlr->isPassthrough())
+         LOG_ASSERT_ERROR(getCacheState(evict_address) == CacheState::INVALID, "Evicted address did not become invalid, now in state %s", CStateString(getCacheState(evict_address)));
       MYLOG("insertCacheBlock l%d evict done", m_mem_component);
    }
 
@@ -1567,7 +1700,9 @@ CacheCntlr::updateCacheBlock(IntPtr address, CacheState::cstate_t new_cstate, Tr
    SubsecondTime latency = SubsecondTime::Zero();
    bool sibling_hit = false;
 
-   if (! m_master->m_prev_cache_cntlrs.empty())
+   // Drake: inclusion
+   // we don't need this unless LLC is not passthrough
+   if (!m_passthrough && ! m_master->m_prev_cache_cntlrs.empty())
    {
       for(CacheCntlrList::iterator it = m_master->m_prev_cache_cntlrs.begin(); it != m_master->m_prev_cache_cntlrs.end(); it++) {
          std::pair<SubsecondTime, bool> res = (*it)->updateCacheBlock(
@@ -1637,10 +1772,16 @@ CacheCntlr::updateCacheBlock(IntPtr address, CacheState::cstate_t new_cstate, Tr
             /* next level already has the data */
 
          } else if (m_next_cache_cntlr) {
-            /* write straight into the next level cache */
-            Byte data_buf[getCacheBlockSize()];
-            retrieveCacheBlock(address, data_buf, thread_num, false);
-            m_next_cache_cntlr->writeCacheBlock(address, 0, data_buf, getCacheBlockSize(), thread_num);
+            // Drake: inclusion
+            // we should've probably somehow send this data to the directory/LLC/DRAM in the case of a non-inclusive cache, however writing back the dirty data isn't even necessary because our L1 is shared, hence every core is able to see that change without having a lower cache level do the coherency work. For now we're just leaving most things as they are, in case we break something.
+            // for the purpose of removing inclusion, if we want LLC passthrough we shouldn't write into the next level (LLC)
+            if (!m_next_cache_cntlr->isPassthrough())
+            {
+               /* write straight into the next level cache */
+               Byte data_buf[getCacheBlockSize()];
+               retrieveCacheBlock(address, data_buf, thread_num, false);
+               m_next_cache_cntlr->writeCacheBlock(address, 0, data_buf, getCacheBlockSize(), thread_num);
+            }
             is_writeback = true;
             sibling_hit = true;
 
@@ -1714,7 +1855,9 @@ CacheCntlr::updateCacheBlock(IntPtr address, CacheState::cstate_t new_cstate, Tr
    LOG_ASSERT_ERROR(out_buf ? buf_written : true, "out_buf passed in but never written to");
    /* Assume tag access caused by snooping is already accounted for in lower level cache access time,
       so only when we accessed data should we return any latency */
-   if (is_writeback)
+   // Drake: inclusion
+   // since we are in updatecacheblock(), if we are in L1 and LLC is a passthrough to NUCA, we don't need to incur this
+   if (is_writeback && m_next_cache_cntlr && !m_next_cache_cntlr->isPassthrough())
       latency += m_writeback_time.getLatency();
    return std::pair<SubsecondTime, bool>(latency, sibling_hit);
 }
@@ -1919,20 +2062,25 @@ MYLOG("processShRepFromDramDirectory l%d", m_mem_component);
 void
 CacheCntlr::processUpgradeRepFromDramDirectory(core_id_t sender, core_id_t requester, PrL1PrL2DramDirectoryMSI::ShmemMsg* shmem_msg)
 {
-MYLOG("processShRepFromDramDirectory l%d", m_mem_component);
+MYLOG("processUpgradeRepFromDramDirectory l%d", m_mem_component);
    // We now have the only copy. Change to a writeable state.
    IntPtr address = shmem_msg->getAddress();
    CacheState::cstate_t cstate = getCacheState(address);
 
    if (cstate == CacheState::INVALID)
    {
-      // I lost my copy because a concurrent UPGRADE REQ had INVed it, because the state
-      // was Modified  when this request was processed, the data should be in the message
-      // because it was FLUSHed (see dram_directory_cntlr.cc, MODIFIED case of the upgrade req)
-      Byte* data_buf = shmem_msg->getDataBuf();
-      LOG_ASSERT_ERROR(data_buf, "Trying to upgrade a block that is now INV and no data in the shmem_msg");
+      // Drake: inclusion
+      // shouldn't do anything if LLC is passthrough
+      if (!m_passthrough)
+      {
+         // I lost my copy because a concurrent UPGRADE REQ had INVed it, because the state
+         // was Modified  when this request was processed, the data should be in the message
+         // because it was FLUSHed (see dram_directory_cntlr.cc, MODIFIED case of the upgrade req)
+         Byte* data_buf = shmem_msg->getDataBuf();
+         LOG_ASSERT_ERROR(data_buf, "Trying to upgrade a block that is now INV and no data in the shmem_msg");
 
-      updateCacheBlock(address, CacheState::MODIFIED, Transition::UPGRADE, data_buf, ShmemPerfModel::_SIM_THREAD);
+         updateCacheBlock(address, CacheState::MODIFIED, Transition::UPGRADE, data_buf, ShmemPerfModel::_SIM_THREAD);
+      }
    }
    else if  (cstate == CacheState::SHARED_UPGRADING)
    {
@@ -1981,9 +2129,25 @@ MYLOG("processInvReqFromDramDirectory l%d", m_mem_component);
    }
    else
    {
-      // Update Shared Mem perf counters for access to L2 Cache
-      getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
-MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      // Drake: inclusion
+      // should just send a dummy reply since L2's copy is invalid anyways
+      if (m_passthrough)
+      {
+         MYLOG("L2's copy of %lx should be invalid, sending dummy INV_REP to directory", address);
+         getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::DUMMY,
+            MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+            shmem_msg->getRequester() /* requester */,
+            sender /* receiver */,
+            address,
+            NULL, 0,
+            HitWhere::UNKNOWN, shmem_msg->getPerf(), ShmemPerfModel::_SIM_THREAD);
+      }
+      else
+      {
+         // Update Shared Mem perf counters for access to L2 Cache
+         getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
+      MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      }
    }
 }
 
@@ -2018,9 +2182,25 @@ MYLOG("processFlushReqFromDramDirectory l%d", m_mem_component);
    }
    else
    {
-      // Update Shared Mem perf counters for access to L2 Cache
-      getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
-MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      // Drake: inclusion
+      // should just send a dummy reply since L2's copy is invalid anyways
+      if (m_passthrough)
+      {
+         MYLOG("L2's copy of %lx should be invalid, sending dummy FLUSH_REP to directory", address);
+         getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::DUMMY,
+            MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+            shmem_msg->getRequester() /* requester */,
+            sender /* receiver */,
+            address,
+            NULL, 0,
+            HitWhere::UNKNOWN, shmem_msg->getPerf(), ShmemPerfModel::_SIM_THREAD);
+      }
+      else
+      {
+         // Update Shared Mem perf counters for access to L2 Cache
+         getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
+         MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      }
    }
 }
 
@@ -2058,10 +2238,26 @@ MYLOG("processWbReqFromDramDirectory l%d", m_mem_component);
    }
    else
    {
-      // Update Shared Mem perf counters for access to L2 Cache
-      getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
-      shmem_msg->getPerf()->updateTime(getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), ShmemPerf::REMOTE_CACHE_WB);
-MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      // Drake: inclusion
+      // should just send a dummy reply since L2's copy is invalid anyways
+      if (m_passthrough)
+      {
+         MYLOG("L2's copy of %lx should be invalid, sending dummy WB_REP to directory", address);
+         getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::DUMMY,
+            MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+            shmem_msg->getRequester() /* requester */,
+            sender /* receiver */,
+            address,
+            NULL, 0,
+            HitWhere::UNKNOWN, shmem_msg->getPerf(), ShmemPerfModel::_SIM_THREAD);
+      }
+      else
+      {
+         // Update Shared Mem perf counters for access to L2 Cache
+         getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_TAGS, ShmemPerfModel::_SIM_THREAD);
+         shmem_msg->getPerf()->updateTime(getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), ShmemPerf::REMOTE_CACHE_WB);
+         MYLOG("invalid @ %lx, hoping eviction message is underway", address);
+      }
    }
 }
 

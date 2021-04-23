@@ -35,6 +35,9 @@ namespace PrL1PrL2DramDirectoryMSI
             DRAM_WRITE_REQ,
             // DRAM > tag directory
             DRAM_READ_REP,
+            // Drake: inclusion
+            DUMMY,
+            CLEAN_EVICT_TO_NUCA,
 
             MAX_MSG_TYPE = NULLIFY_REQ,
             NUM_MSG_TYPES = MAX_MSG_TYPE - MIN_MSG_TYPE + 1

@@ -56,6 +56,8 @@ namespace PrL1PrL2DramDirectoryMSI
          void processInvRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg);
          void processFlushRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg);
          void processWbRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg);
+         // Drake: inclusion
+         void processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg);
          void sendDataToNUCA(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now, bool count);
          void sendDataToDram(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now);
 

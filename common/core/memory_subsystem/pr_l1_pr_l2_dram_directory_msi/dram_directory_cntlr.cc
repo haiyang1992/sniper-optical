@@ -170,6 +170,17 @@ DramDirectoryCntlr::handleMsgFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg)
          processWbRepFromL2Cache(sender, shmem_msg);
          break;
 
+      // Drake: inclusion
+      case ShmemMsg::DUMMY:
+         MYLOG("DUMMY<%u @ %lx", sender, address);
+         processNextReqFromL2Cache(address);
+         break;
+
+      case ShmemMsg::CLEAN_EVICT_TO_NUCA:
+         MYLOG("CLEAN_EVICT_TO_NUCA<%u @ %lx", sender, address);
+         processCleanEvictFromL2Cache(address, shmem_msg);
+         break;
+
       default:
          LOG_PRINT_ERROR("Unrecognized Shmem Msg Type: %u", shmem_msg_type);
          break;
@@ -1193,6 +1204,53 @@ DramDirectoryCntlr::processWbRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_ms
    {
       LOG_PRINT_ERROR("Should not reach here");
    }
+   MYLOG("End @ %lx", address);
+}
+
+
+// Drake: inclusion
+void
+DramDirectoryCntlr::processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shmem_msg)
+{
+   IntPtr address = shmem_msg->getAddress();
+   SubsecondTime now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD);
+
+   MYLOG("Start @ %lx", address);
+
+   DirectoryEntry* directory_entry = m_dram_directory_cache->getDirectoryEntry(address);
+   assert(directory_entry);
+
+   DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
+
+   SubsecondTime nuca_latency;
+   HitWhere::where_t hit_where;
+   Byte nuca_data_buf[getCacheBlockSize()];
+
+   boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, now, m_nuca_cache->getShmemPerfModel(), false);
+   if (hit_where == HitWhere::MISS)
+   {
+      assert(directory_entry->hasSharer(sender));
+      directory_entry->removeSharer(sender);
+      directory_entry->setForwarder(INVALID_CORE_ID);
+      directory_entry->setOwner(INVALID_CORE_ID);
+
+      // could be that this is a FLUSH to force a core with S-state to to write back clean data
+      // to avoid a memory access
+      if (directory_entry->getNumSharers() == 0)
+      {
+         directory_block_info->setDState(DirectoryState::UNCACHED);
+      }
+      else
+      {
+         assert(directory_block_info->getDState() == DirectoryState::SHARED);
+      }
+      sendDataToNUCA(address, shmem_msg->getRequester(), shmem_msg->getDataBuf(), now, false);
+   }
+   else
+   {
+      processInvRepFromL2Cache(sender, shmem_msg);
+   }
+
    MYLOG("End @ %lx", address);
 }
 

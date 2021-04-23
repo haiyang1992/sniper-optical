@@ -288,6 +288,9 @@ namespace ParametricDramDirectoryMSI
                Byte* data_buf, UInt32 data_length, bool update_replacement);
          bool operationPermissibleinCache(
                IntPtr address, Core::mem_op_t mem_op_type, CacheBlockInfo **cache_block_info = NULL);
+         // Drake: inclusion
+         bool L1operationPermissibleinCache(
+               IntPtr address, Core::mem_op_t mem_op_type, CacheBlockInfo **cache_block_info = NULL);
 
          void copyDataFromNextLevel(Core::mem_op_t mem_op_type, IntPtr address, bool modeled, SubsecondTime t_start);
          void trainPrefetcher(IntPtr address, bool cache_hit, bool prefetch_hit, bool prefetch_own, SubsecondTime t_issue);
@@ -403,6 +406,8 @@ namespace ParametricDramDirectoryMSI
          bool isFirstLevel(void) { return m_master->m_prev_cache_cntlrs.empty(); }
          bool isLastLevel(void) { return ! m_next_cache_cntlr; }
          bool isShared(core_id_t core_id); //< Return true if core shares this cache
+         // Drake: inclusion
+         bool isPassthrough(void) {return m_passthrough;}
 
          bool isInLowerLevelCache(CacheBlockInfo *block_info);
          void incrementQBSLookupCost();
