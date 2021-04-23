@@ -15,13 +15,16 @@ except AttributeError, e:
 def cpistack_compute(jobid = 0, resultsdir = None, config = None, stats = None, data = None, partial = None,
                      cores_list = None, core_mincomp = 0., aggregate = False,
                      items = None, groups = None, use_simple = False, use_simple_mem = True,
-                     no_collapse = False):
+                     no_collapse = False, benchname = None):
 
   # Get the data
   cpidata = cpistack_data.CpiData(jobid = jobid, resultsdir = resultsdir, config = config, stats = stats, data = data, partial = partial)
   cpidata.filter(cores_list = cores_list, core_mincomp = core_mincomp)
   if aggregate:
-    cpidata.aggregate()
+    if benchname:
+      cpidata.aggregate_benchmark(benchname)
+    else:
+      cpidata.aggregate()
 
   # Build the structure descriptor
   cpiitems = cpistack_items.CpiItems(items = items, groups = groups, use_simple = use_simple, use_simple_mem = use_simple_mem)
@@ -135,9 +138,10 @@ if __name__ == '__main__':
   no_collapse = False
   aggregate = False
   save_gnuplot_input = False
+  benchname = None
 
   try:
-    opts, args = getopt.getopt(sys.argv[1:], "hj:d:o:", [ "help", "title=", "no-roi", "simplified", "no-collapse", "no-simple-mem", "cpi", "time", "abstime", "aggregate", "partial=", "save-gnuplot-input" ])
+    opts, args = getopt.getopt(sys.argv[1:], "hj:d:o:b:", [ "help", "title=", "no-roi", "simplified", "no-collapse", "no-simple-mem", "cpi", "time", "abstime", "aggregate", "partial=", "save-gnuplot-input", "benchname" ])
   except getopt.GetoptError, e:
     print e
     usage()
@@ -177,6 +181,8 @@ if __name__ == '__main__':
       partial = a.split(':')
     if o == '--save-gnuplot-input':
       save_gnuplot_input = True
+    if o == '-b':
+      benchname = a
 
   if args:
     usage()
@@ -184,7 +190,7 @@ if __name__ == '__main__':
 
   results = cpistack_compute(jobid = jobid, resultsdir = resultsdir, partial = partial, aggregate = aggregate,
                              groups = use_simple and cpistack_items.build_grouplist(legacy = True) or None,
-                             use_simple = use_simple, use_simple_mem = use_simple_mem, no_collapse = no_collapse)
+                             use_simple = use_simple, use_simple_mem = use_simple_mem, no_collapse = no_collapse, benchname = benchname)
 
   if len(results.cores) > 1:
     output_cpistack_table(results, metric = metric or 'cpi')

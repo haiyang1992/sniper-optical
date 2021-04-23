@@ -274,7 +274,7 @@ def main(jobid, resultsdir, outputfile, powertype = 'dynamic', config = None, no
 
 
 
-def power_stack(power_dat, powertype = 'total', nocollapse = False):
+def power_stack(power_dat, powertype = 'total', nocollapse = True): # don't omit lines for my experiments
   def getpower(powers, key = None):
     def getcomponent(suffix):
       if key: return powers.get(key+'/'+suffix, 0)

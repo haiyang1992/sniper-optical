@@ -10,6 +10,27 @@ class CpiData:
     self.stats = data_raw['results']
     self.config = data_raw['config']
     self.parse()
+    self.bench_threads = self.init_threads()
+
+  # start and end thread ids for ~16 thread Parsec benchmarks
+  def init_threads(self):
+      threads_count = {}
+      threads_count["blackscholes"] = (0, 15)
+      threads_count["bodytrack"] = (0, 15)
+      threads_count["canneal"] = (0, 15)
+      threads_count["dedup"] = (0, 14)
+      threads_count["facesim"] = (0, 15)
+      threads_count["ferret"] = (0, 14)
+      threads_count["fluidanimate"] = (0, 8)
+      threads_count["freqmine"] = (0, 15)
+      threads_count["raytrace"] = (0, 15)
+      threads_count["streamcluster"] = (0, 15)
+      threads_count["swaptions"] = (0, 15)
+      threads_count["vips"] = (0, 15)
+      threads_count["x264"] = (0 ,15)
+      threads_count["single"] = (0, 0)
+
+      return threads_count
 
   def parse(self):
     ncores = int(self.config['general/total_cores'])
@@ -156,6 +177,22 @@ class CpiData:
 
   def aggregate(self):
     allkeys = self.data[self.cores[0]].keys()
+    self.data = { 0: dict([ (key, sum([ self.data[core][key] for core in self.cores ]) / len(self.cores)) for key in allkeys ]) }
+    self.instrs = { 0: sum(self.instrs[core] for core in self.cores) / len(self.cores) }
+    self.ncores = 1
+    self.cores = [0]
+
+  def aggregate_benchmark(self, benchname):
+    allkeys = self.data[self.cores[0]].keys()
+    # we only want to process master threads here, so remove accordingly
+    if str(benchname) in self.bench_threads:
+        start = self.bench_threads[str(benchname)][0]
+        end = self.bench_threads[str(benchname)][1]
+    else:
+        start = 0
+        end = 0
+    self.ncores = end - start + 1
+    self.cores = list(range(start, end + 1))
     self.data = { 0: dict([ (key, sum([ self.data[core][key] for core in self.cores ]) / len(self.cores)) for key in allkeys ]) }
     self.instrs = { 0: sum(self.instrs[core] for core in self.cores) / len(self.cores) }
     self.ncores = 1
