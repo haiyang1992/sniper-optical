@@ -1,4 +1,4 @@
-#ifndef __CACHE_PERF_MODEL_SEQUENTIAL_H__ 
+#ifndef __CACHE_PERF_MODEL_SEQUENTIAL_H__
 #define __CACHE_PERF_MODEL_SEQUENTIAL_H__
 
 #include "cache_perf_model.h"
@@ -34,6 +34,7 @@ class CachePerfModelSequential : public CachePerfModel
                return m_cache_data_access_time.getLatency();
 
             case ACCESS_CACHE_DATA_AND_TAGS:
+            case PCM_WRITE_CACHE_DATA_AND_TAGS:
                return m_cache_data_access_time.getLatency() + m_cache_tags_access_time.getLatency();
 
             default:

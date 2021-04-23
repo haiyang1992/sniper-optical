@@ -1,6 +1,7 @@
 #include "cache_perf_model.h"
 #include "cache_perf_model_parallel.h"
 #include "cache_perf_model_sequential.h"
+#include "cache_perf_model_pcm.h"
 #include "log.h"
 
 CachePerfModel::CachePerfModel(const ComponentLatency& cache_data_access_time, const ComponentLatency& cache_tags_access_time):
@@ -13,7 +14,7 @@ CachePerfModel::~CachePerfModel()
 
 CachePerfModel*
 CachePerfModel::create(String cache_perf_model_type,
-      const ComponentLatency& cache_data_access_time, const ComponentLatency& cache_tags_access_time)
+      const ComponentLatency& cache_data_access_time, const ComponentLatency& cache_tags_access_time, const ComponentLatency& pcm_write_time)
 {
    PerfModel_t perf_model = parseModelType(cache_perf_model_type);
 
@@ -24,6 +25,9 @@ CachePerfModel::create(String cache_perf_model_type,
 
       case(CACHE_PERF_MODEL_SEQUENTIAL):
          return new CachePerfModelSequential(cache_data_access_time, cache_tags_access_time);
+
+      case(CACHE_PERF_MODEL_PCM):
+         return new CachePerfModelPCM(cache_data_access_time, cache_tags_access_time, pcm_write_time);
 
       default:
          LOG_ASSERT_ERROR(false, "Unsupported CachePerfModel type: %s", cache_perf_model_type.c_str());
@@ -42,10 +46,13 @@ CachePerfModel::parseModelType(String model_type)
    {
       return CACHE_PERF_MODEL_SEQUENTIAL;
    }
+   else if (model_type == "pcm")
+   {
+      return CACHE_PERF_MODEL_PCM;
+   }
    else
    {
       LOG_PRINT_ERROR("Unsupported CacheModel type: %s", model_type.c_str());
       return NUM_CACHE_PERF_MODELS;
    }
 }
-

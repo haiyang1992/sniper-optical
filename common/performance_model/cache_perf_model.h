@@ -12,6 +12,7 @@ class CachePerfModel
          ACCESS_CACHE_DATA_AND_TAGS = 0,
          ACCESS_CACHE_DATA,
          ACCESS_CACHE_TAGS,
+         PCM_WRITE_CACHE_DATA_AND_TAGS,
          NUM_CACHE_ACCESS_TYPES
       };
 
@@ -19,6 +20,7 @@ class CachePerfModel
       {
          CACHE_PERF_MODEL_PARALLEL = 0,
          CACHE_PERF_MODEL_SEQUENTIAL,
+         CACHE_PERF_MODEL_PCM,
          NUM_CACHE_PERF_MODELS
       };
 
@@ -32,7 +34,8 @@ class CachePerfModel
 
       static CachePerfModel* create(String cache_perf_model_type,
             const ComponentLatency& cache_data_access_time,
-            const ComponentLatency& cache_tags_access_time);
+            const ComponentLatency& cache_tags_access_time,
+            const ComponentLatency& pcm_write_time);
       static PerfModel_t parseModelType(String model_type);
 
       virtual void enable() = 0;

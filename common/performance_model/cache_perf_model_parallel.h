@@ -1,4 +1,4 @@
-#ifndef __CACHE_PERF_MODEL_PARALLEL_H__ 
+#ifndef __CACHE_PERF_MODEL_PARALLEL_H__
 #define __CACHE_PERF_MODEL_PARALLEL_H__
 
 #include "cache_perf_model.h"
@@ -32,13 +32,13 @@ class CachePerfModelParallel : public CachePerfModel
 
             case ACCESS_CACHE_DATA:
             case ACCESS_CACHE_DATA_AND_TAGS:
+            case PCM_WRITE_CACHE_DATA_AND_TAGS:
                return m_cache_data_access_time.getLatency();
 
             default:
                return SubsecondTime::Zero();
          }
       }
- 
 };
 
 #endif /* __CACHE_PERF_MODEL_PARALLEL_H__ */
