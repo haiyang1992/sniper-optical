@@ -356,7 +356,8 @@ void TraceManager::Monitor::run()
       {
          fprintf(stderr, "[SNIPER] WARNING: No SIFT connections made yet. Waiting...\n");
       }
-      else if (n == 60)
+      // Longer timeout for better stability
+      else if (n >= 360)
       {
          fprintf(stderr, "[SNIPER] ERROR: Could not establish SIFT connection, aborting! Check benchmark-app*.log for errors.\n");
          exit(1);

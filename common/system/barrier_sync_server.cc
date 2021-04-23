@@ -275,8 +275,9 @@ BarrierSyncServer::barrierRelease(thread_id_t caller_id, bool continue_until_rel
          // If HOOK_PERIODIC woke someone up, this thread can safely go to sleep
          if (Sim()->getThreadManager()->anyThreadRunning())
             return false;
-         else
-            LOG_ASSERT_ERROR(Sim()->getSyscallServer()->getNextTimeout(m_global_time) < SubsecondTime::MaxTime(), "No threads running, no timeout. Application has deadlocked...");
+         // Drake: commented off the below 2 lines (https://groups.google.com/g/snipersim/c/CFgwjayReIk/m/K8iXaT2YAAAJ)
+         // else
+         //    LOG_ASSERT_ERROR(Sim()->getSyscallServer()->getNextTimeout(m_global_time) < SubsecondTime::MaxTime(), "No threads running, no timeout. Application has deadlocked...");
       }
 
       // If the barrier was disabled from HOOK_PERIODIC (for instance, if roi-end was triggered from a script), break

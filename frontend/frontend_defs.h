@@ -6,7 +6,8 @@
 #include "bbv_count.h"
 
 #define LINE_SIZE_BYTES 64
-#define MAX_NUM_THREADS 128
+// Parsec x264
+#define MAX_NUM_THREADS 512
 #define MAX_NUM_SYSCALLS 4096
 
 // Type declarations
@@ -55,13 +56,13 @@ typedef struct
 // enums
 
 /// ISAs supported in the frontend
-enum FrontendISA 
+enum FrontendISA
 {
   UNDEF_ISA,
-  INTEL_IA32, 
-  INTEL_X86_64, 
-  ARM_AARCH32, 
+  INTEL_IA32,
+  INTEL_X86_64,
+  ARM_AARCH32,
   ARM_AARCH64
-};  
+};
 
 #endif // __FRONTEND_DEFS_H
