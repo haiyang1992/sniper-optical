@@ -86,6 +86,7 @@ namespace ParametricDramDirectoryMSI
          bool coherent;
          ComponentLatency data_access_time;
          ComponentLatency tags_access_time;
+         ComponentLatency pcm_write_time;
          ComponentLatency writeback_time;
          ComponentBandwidthPerCycle next_level_read_bandwidth;
          String perf_model_type;
@@ -97,12 +98,14 @@ namespace ParametricDramDirectoryMSI
          CacheParameters()
             : data_access_time(NULL,0)
             , tags_access_time(NULL,0)
+            , pcm_write_time(NULL,0)
             , writeback_time(NULL,0)
          {}
          CacheParameters(
             String _configName, UInt32 _size, UInt32 _associativity, UInt32 block_size,
             String _hash_function, String _replacement_policy, bool _perfect, bool _coherent,
             const ComponentLatency& _data_access_time, const ComponentLatency& _tags_access_time,
+            const ComponentLatency& _pcm_write_time,
             const ComponentLatency& _writeback_time, const ComponentBandwidthPerCycle& _next_level_read_bandwidth,
             String _perf_model_type, bool _writethrough, UInt32 _shared_cores,
             String _prefetcher, UInt32 _outstanding_misses)
@@ -110,6 +113,7 @@ namespace ParametricDramDirectoryMSI
             configName(_configName), size(_size), associativity(_associativity),
             hash_function(_hash_function), replacement_policy(_replacement_policy), perfect(_perfect), coherent(_coherent),
             data_access_time(_data_access_time), tags_access_time(_tags_access_time),
+            pcm_write_time(_pcm_write_time),
             writeback_time(_writeback_time), next_level_read_bandwidth(_next_level_read_bandwidth),
             perf_model_type(_perf_model_type), writethrough(_writethrough), shared_cores(_shared_cores),
             prefetcher(_prefetcher), outstanding_misses(_outstanding_misses)

@@ -14,6 +14,7 @@ NucaCache::NucaCache(MemoryManagerBase* memory_manager, ShmemPerfModel* shmem_pe
    , m_cache_block_size(cache_block_size)
    , m_data_access_time(parameters.data_access_time)
    , m_tags_access_time(parameters.tags_access_time)
+   , m_pcm_write_time(parameters.pcm_write_time)
    , m_data_array_bandwidth(8 * Sim()->getCfg()->getFloat("perf_model/nuca/bandwidth"))
    , m_queue_model(NULL)
    , m_reads(0)
@@ -139,6 +140,12 @@ NucaCache::accessDataArray(Cache::access_t access, SubsecondTime t_start, ShmemP
    {
       queue_delay = SubsecondTime::Zero();
    }
+
+   // if (access == Cache::STORE){
+   //    perf->updateTime(t_start + queue_delay + m_pcm_write_time.getLatency(), ShmemPerf::NUCA_DATA);
+
+   //    return queue_delay + m_pcm_write_time.getLatency();
+   // }
 
    perf->updateTime(t_start + queue_delay + m_data_access_time.getLatency(), ShmemPerf::NUCA_DATA);
 

@@ -399,7 +399,12 @@ LOG_ASSERT_ERROR(offset + data_length <= getCacheBlockSize(), "access until %u >
    if (cache_hit)
    {
 MYLOG("L1 hit");
-      getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
+      if (mem_op_type == Core::WRITE){
+         getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::PCM_WRITE_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
+      }
+      else{
+         getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
+      }
       hit_where = (HitWhere::where_t)m_mem_component;
 
       if (cache_block_info->hasOption(CacheBlockInfo::WARMUP) && Sim()->getInstrumentationMode() != InstMode::CACHE_ONLY)
@@ -853,7 +858,7 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
          }
          else
          {
-            getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::ACCESS_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
+            getMemoryManager()->incrElapsedTime(m_mem_component, mem_op_type == Core::WRITE ? CachePerfModel::PCM_WRITE_CACHE_DATA_AND_TAGS: CachePerfModel::ACCESS_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
          }
       }
 

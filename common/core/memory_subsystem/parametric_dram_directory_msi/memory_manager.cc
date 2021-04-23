@@ -127,6 +127,7 @@ MemoryManager::MemoryManager(Core* core,
                : true,
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/data_access_time", core->getId())),
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/tags_access_time", core->getId())),
+            ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/pcm_write_time", core->getId())),
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/writeback_time", core->getId())),
             ComponentBandwidthPerCycle(clock_domain,
                i < (UInt32)m_last_level_cache
@@ -162,6 +163,7 @@ MemoryManager::MemoryManager(Core* core,
             false, true,
             ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/data_access_time", core->getId())),
             ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/tags_access_time", core->getId())),
+            ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/pcm_write_time", core->getId())),
             ComponentLatency(global_domain, 0), ComponentBandwidthPerCycle(global_domain, 0), "", false, 0, "", 0 // unused
          );
       }
@@ -313,7 +315,8 @@ MemoryManager::MemoryManager(Core* core,
       m_cache_perf_models[(MemComponent::component_t)i] = CachePerfModel::create(
        cache_parameters[(MemComponent::component_t)i].perf_model_type,
        cache_parameters[(MemComponent::component_t)i].data_access_time,
-       cache_parameters[(MemComponent::component_t)i].tags_access_time
+       cache_parameters[(MemComponent::component_t)i].tags_access_time,
+       cache_parameters[(MemComponent::component_t)i].pcm_write_time
       );
 
 

@@ -24,6 +24,7 @@ class NucaCache
       UInt32 m_cache_block_size;
       ComponentLatency m_data_access_time;
       ComponentLatency m_tags_access_time;
+      ComponentLatency m_pcm_write_time;
       ComponentBandwidth m_data_array_bandwidth;
 
       Cache* m_cache;
