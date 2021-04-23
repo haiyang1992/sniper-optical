@@ -29,6 +29,8 @@ graphite.out
 cpi-stack.jpg
 output_files
 tools/cpistack-collect/cpistack-*
+test/**/viz
+sim.scripts.py
 
 # compiled libraries
 lib/libcarbon_sim.a
