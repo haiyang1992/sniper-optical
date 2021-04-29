@@ -17,6 +17,7 @@
 #include "stats.h"
 #include "subsecond_time.h"
 #include "shmem_perf.h"
+#include "queue_model.h"
 
 #include "boost/tuple/tuple.hpp"
 
@@ -87,7 +88,9 @@ namespace ParametricDramDirectoryMSI
          ComponentLatency data_access_time;
          ComponentLatency tags_access_time;
          ComponentLatency pcm_write_time;
+         ComponentLatency next_level_pcm_write_time;
          ComponentLatency writeback_time;
+         ComponentLatency wq_access_time;
          ComponentBandwidthPerCycle next_level_read_bandwidth;
          String perf_model_type;
          bool writethrough;
@@ -95,28 +98,41 @@ namespace ParametricDramDirectoryMSI
          String prefetcher;
          UInt32 outstanding_misses;
 
+         // Drake: write-queue
+         bool has_wq;
+         UInt32 wq_size;
+
          CacheParameters()
             : data_access_time(NULL,0)
             , tags_access_time(NULL,0)
             , pcm_write_time(NULL,0)
+            , next_level_pcm_write_time(NULL,0)
             , writeback_time(NULL,0)
+            , wq_access_time(NULL,0)
          {}
          CacheParameters(
             String _configName, UInt32 _size, UInt32 _associativity, UInt32 block_size,
             String _hash_function, String _replacement_policy, bool _perfect, bool _coherent,
             const ComponentLatency& _data_access_time, const ComponentLatency& _tags_access_time,
-            const ComponentLatency& _pcm_write_time,
-            const ComponentLatency& _writeback_time, const ComponentBandwidthPerCycle& _next_level_read_bandwidth,
+            const ComponentLatency& _pcm_write_time, const ComponentLatency& _next_level_pcm_write_time,
+            const ComponentLatency& _writeback_time,
+            const ComponentLatency& _wq_access_time,
+            const ComponentBandwidthPerCycle& _next_level_read_bandwidth,
             String _perf_model_type, bool _writethrough, UInt32 _shared_cores,
-            String _prefetcher, UInt32 _outstanding_misses)
+            String _prefetcher, UInt32 _outstanding_misses,
+            bool _has_wq, UInt32 _wq_size
+            )
          :
             configName(_configName), size(_size), associativity(_associativity),
             hash_function(_hash_function), replacement_policy(_replacement_policy), perfect(_perfect), coherent(_coherent),
             data_access_time(_data_access_time), tags_access_time(_tags_access_time),
-            pcm_write_time(_pcm_write_time),
-            writeback_time(_writeback_time), next_level_read_bandwidth(_next_level_read_bandwidth),
+            pcm_write_time(_pcm_write_time), next_level_pcm_write_time(_next_level_pcm_write_time),
+            writeback_time(_writeback_time),
+            wq_access_time(_wq_access_time),
+            next_level_read_bandwidth(_next_level_read_bandwidth),
             perf_model_type(_perf_model_type), writethrough(_writethrough), shared_cores(_shared_cores),
-            prefetcher(_prefetcher), outstanding_misses(_outstanding_misses)
+            prefetcher(_prefetcher), outstanding_misses(_outstanding_misses),
+            has_wq(_has_wq), wq_size(_wq_size)
          {
             num_sets = k_KILO * _size / (_associativity * block_size);
             LOG_ASSERT_ERROR(k_KILO * _size == num_sets * associativity * block_size, "Invalid cache configuration: size(%d Kb) != sets(%d) * associativity(%d) * block_size(%d)", _size, num_sets, associativity, block_size);
@@ -177,6 +193,9 @@ namespace ParametricDramDirectoryMSI
          std::deque<IntPtr> m_prefetch_list;
          SubsecondTime m_prefetch_next;
 
+         // Drake: write-queue
+         std::vector<ContentionModel*> m_write_queue;
+
          void createSetLocks(UInt32 cache_block_size, UInt32 num_sets, UInt32 core_offset, UInt32 num_cores);
          SetLock* getSetLock(IntPtr addr);
 
@@ -184,7 +203,10 @@ namespace ParametricDramDirectoryMSI
             String replacement_policy, CacheBase::hash_t hash_function);
          void accessATDs(Core::mem_op_t mem_op_type, bool hit, IntPtr address, UInt32 core_num);
 
-         CacheMasterCntlr(String name, core_id_t core_id, UInt32 outstanding_misses)
+         // Drake: write-queue
+         void createWQs(String name, core_id_t core_id, UInt32 wq_size);
+
+         CacheMasterCntlr(String name, core_id_t core_id, UInt32 outstanding_misses, UInt32 wq_size)
             : m_cache(NULL)
             , m_prefetcher(NULL)
             , m_dram_cntlr(NULL)
@@ -196,6 +218,7 @@ namespace ParametricDramDirectoryMSI
             , m_atds()
             , m_prefetch_list()
             , m_prefetch_next(SubsecondTime::Zero())
+            , m_write_queue()
          {}
          ~CacheMasterCntlr();
 
@@ -221,6 +244,9 @@ namespace ParametricDramDirectoryMSI
          bool m_prefetch_delay;
          bool m_l1_mshr;
 
+         // Drake: write-queue
+         bool m_has_wq;
+
          struct {
            UInt64 loads, stores;
            UInt64 load_misses, store_misses;
@@ -243,6 +269,13 @@ namespace ParametricDramDirectoryMSI
            SubsecondTime snoop_latency;
            SubsecondTime qbs_query_latency;
            SubsecondTime mshr_latency;
+
+           // Drake: write-queue stats
+           SubsecondTime wq_queue_latency;
+           SubsecondTime wq_access_latency;
+           UInt64 wq_reads;
+           UInt64 wq_read_hits;
+
            UInt64 prefetches;
            UInt64 coherency_downgrades, coherency_upgrades, coherency_invalidates, coherency_writebacks;
            #ifdef ENABLE_TRANSITIONS
@@ -265,6 +298,11 @@ namespace ParametricDramDirectoryMSI
          bool m_cache_writethrough;
          ComponentLatency m_writeback_time;
          ComponentBandwidthPerCycle m_next_level_read_bandwidth;
+         // Drake: write-queue
+         ComponentLatency m_next_level_pcm_write_time;
+         ComponentLatency m_wq_access_time;
+         bool m_wq_dram_overlap;
+         bool m_ignore_read_latency;
 
          UInt32 m_shared_cores;        /**< Number of cores this cache is shared with */
          core_id_t m_core_id_master;   /**< Core id of the 'master' (actual) cache controller we're proxying */
@@ -318,9 +356,9 @@ namespace ParametricDramDirectoryMSI
          // Process Request from L1 Cache
          boost::tuple<HitWhere::where_t, SubsecondTime> accessDRAM(Core::mem_op_t mem_op_type, IntPtr address, bool isPrefetch, Byte* data_buf);
          void initiateDirectoryAccess(Core::mem_op_t mem_op_type, IntPtr address, bool isPrefetch, SubsecondTime t_issue);
-         void processExReqToDirectory(IntPtr address);
-         void processShReqToDirectory(IntPtr address);
-         void processUpgradeReqToDirectory(IntPtr address, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num);
+         void processExReqToDirectory(IntPtr address, bool ignore_read_latency=false);
+         void processShReqToDirectory(IntPtr address, bool ignore_read_latency=false);
+         void processUpgradeReqToDirectory(IntPtr address, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num, bool ignore_read_latency=false);
 
          // Process Request from Dram Dir
          void processExRepFromDramDirectory(core_id_t sender, core_id_t requester, PrL1PrL2DramDirectoryMSI::ShmemMsg* shmem_msg);
@@ -414,6 +452,10 @@ namespace ParametricDramDirectoryMSI
 
          void enable() { m_master->m_cache->enable(); }
          void disable() { m_master->m_cache->disable(); }
+
+         // Drake: write-queue
+         bool hasWQ(void) { return m_has_wq; };
+         bool hasAddrInWQ(UInt64 address);
 
          friend class CacheCntlrList;
          friend class MemoryManager;

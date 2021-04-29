@@ -14,7 +14,8 @@ namespace PrL1PrL2DramDirectoryMSI
       m_address(INVALID_ADDRESS),
       m_data_buf(NULL),
       m_data_length(0),
-      m_perf(perf)
+      m_perf(perf),
+      m_ignore_read_latency(false)
    {}
 
    ShmemMsg::ShmemMsg(msg_t msg_type,
@@ -33,7 +34,8 @@ namespace PrL1PrL2DramDirectoryMSI
       m_address(address),
       m_data_buf(data_buf),
       m_data_length(data_length),
-      m_perf(perf)
+      m_perf(perf),
+      m_ignore_read_latency(false)
    {}
 
    ShmemMsg::ShmemMsg(ShmemMsg* shmem_msg) :
@@ -44,7 +46,8 @@ namespace PrL1PrL2DramDirectoryMSI
       m_address(shmem_msg->getAddress()),
       m_data_buf(shmem_msg->getDataBuf()),
       m_data_length(shmem_msg->getDataLength()),
-      m_perf(shmem_msg->getPerf())
+      m_perf(shmem_msg->getPerf()),
+      m_ignore_read_latency(false)
    {}
 
    ShmemMsg::~ShmemMsg()

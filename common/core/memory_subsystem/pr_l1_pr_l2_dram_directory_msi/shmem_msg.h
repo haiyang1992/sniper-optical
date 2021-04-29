@@ -53,6 +53,8 @@ namespace PrL1PrL2DramDirectoryMSI
          Byte* m_data_buf;
          UInt32 m_data_length;
          ShmemPerf* m_perf;
+         // Drake: write-queue
+         bool m_ignore_read_latency;
 
       public:
          ShmemMsg() = delete;
@@ -89,6 +91,10 @@ namespace PrL1PrL2DramDirectoryMSI
          void setWhere(HitWhere::where_t where) { m_where = where; }
 
          ShmemPerf* getPerf() { return m_perf; }
+
+         // Drake: write-queue
+         bool getIgnoreReadLatency() { return m_ignore_read_latency; }
+         void setIgnoreReadLatency(bool ignore) { m_ignore_read_latency = ignore; }
 
    };
 

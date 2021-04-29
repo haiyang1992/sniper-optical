@@ -184,3 +184,16 @@ Cache::updateHits(Core::mem_op_t mem_op_type, UInt64 hits)
       m_num_hits += hits;
    }
 }
+
+// Drake: write-queue
+// for getting index for bankID
+UInt32
+Cache::getIndex(IntPtr addr)
+{
+   IntPtr tag;
+   UInt32 set_index;
+   UInt32 block_offset;
+
+   splitAddress(addr, tag, set_index, block_offset);
+   return set_index;
+}

@@ -648,27 +648,47 @@ DramDirectoryCntlr::retrieveDataAndSendToL2Cache(ShmemMsg::msg_t reply_msg_type,
    {
       if (m_nuca_cache)
       {
+         // Drake: write-queue
+         MYLOG("Trying to read from NUCA");
          SubsecondTime nuca_latency;
          HitWhere::where_t hit_where;
          Byte nuca_data_buf[getCacheBlockSize()];
-         boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), orig_shmem_msg->getPerf(), true);
 
-         getShmemPerfModel()->incrElapsedTime(nuca_latency, ShmemPerfModel::_SIM_THREAD);
+         // determine if we want to ignore read latency because we had a hit in the write queue
+         if (orig_shmem_msg->getIgnoreReadLatency())
+         {
+            boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), m_nuca_cache->getShmemPerfModel(), false);
+         }
+         else
+         {
+            boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), orig_shmem_msg->getPerf(), true);
+            getShmemPerfModel()->incrElapsedTime(nuca_latency, ShmemPerfModel::_SIM_THREAD);
+         }
 
          if (hit_where != HitWhere::MISS)
          {
+            // Drake: write-queue
+            HitWhere::where_t true_hit_where = orig_shmem_msg->getIgnoreReadLatency() ? HitWhere::WRITE_QUEUE : HitWhere::NUCA_CACHE;
             getMemoryManager()->sendMsg(reply_msg_type,
                   MemComponent::TAG_DIR, MemComponent::L2_CACHE,
                   receiver /* requester */,
                   receiver /* receiver */,
                   address,
                   nuca_data_buf, getCacheBlockSize(),
-                  HitWhere::NUCA_CACHE,
+                  // HitWhere::NUCA_CACHE,
+                  true_hit_where,
                   orig_shmem_msg->getPerf(),
                   ShmemPerfModel::_SIM_THREAD);
 
             // Process Next Request
             processNextReqFromL2Cache(address);
+
+            // Drake: write-queue
+            // for onelevel_pcm: invalidate this entry in the directory because we want double passthrough
+            directory_entry->removeSharer(receiver);
+            directory_entry->setOwner(INVALID_CORE_ID);
+            directory_entry->getDirectoryBlockInfo()->setDState(DirectoryState::UNCACHED);
+            directory_entry->setAddress(INVALID_ADDRESS);
 
             return;
          }
@@ -777,6 +797,13 @@ DramDirectoryCntlr::processDRAMReply(core_id_t sender, ShmemMsg* shmem_msg)
          LOG_PRINT_ERROR("Unsupported request type: %u", shmem_req->getShmemMsg()->getMsgType());
    }
 
+   // Drake: write-queue
+   // for onelevel_pcm: invalidate this entry in the directory because we want double passthrough
+   directory_entry->removeSharer(shmem_req->getShmemMsg()->getRequester());
+   directory_entry->setOwner(INVALID_CORE_ID);
+   directory_entry->getDirectoryBlockInfo()->setDState(DirectoryState::UNCACHED);
+   directory_entry->setAddress(INVALID_ADDRESS);
+
    //   Which HitWhere to report?
 
    HitWhere::where_t hit_where = shmem_msg->getWhere();
@@ -812,13 +839,24 @@ DramDirectoryCntlr::processInvRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_m
    MYLOG("Start @ %lx", address);
 
    DirectoryEntry* directory_entry = m_dram_directory_cache->getDirectoryEntry(address);
+   if (!directory_entry)
+   {
+      // this was either clean data eviction (when LLC is NOT passthrough) or dummy INV_REP with no data, so do nothing
+      assert(shmem_msg->getDataBuf() == NULL);
+      return;
+   }
    assert(directory_entry);
 
    DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
-   LOG_ASSERT_ERROR(directory_block_info->getDState() == DirectoryState::SHARED || directory_block_info->getDState() == DirectoryState::EXCLUSIVE, "Ooops (%lx)", address);
-   assert(directory_block_info->getDState() == DirectoryState::SHARED || directory_block_info->getDState() == DirectoryState::EXCLUSIVE);
+   // Drake: write-queue
+   // for onelevel_pcm: comment out below two lines because we want the state to be UNCACHED
+   // LOG_ASSERT_ERROR(directory_block_info->getDState() == DirectoryState::SHARED || directory_block_info->getDState() == DirectoryState::EXCLUSIVE, "Ooops (%lx)", address);
+   // assert(directory_block_info->getDState() == DirectoryState::SHARED || directory_block_info->getDState() == DirectoryState::EXCLUSIVE);
 
-   directory_entry->removeSharer(sender);
+   if (directory_entry->hasSharer(sender))
+   {
+      directory_entry->removeSharer(sender);
+   }
    if (directory_entry->getForwarder() == sender)
    {
       directory_entry->setForwarder(INVALID_CORE_ID);
@@ -1086,14 +1124,27 @@ DramDirectoryCntlr::processFlushRepFromL2Cache(core_id_t sender, ShmemMsg* shmem
    MYLOG("Start @ %lx", address);
 
    DirectoryEntry* directory_entry = m_dram_directory_cache->getDirectoryEntry(address);
-   assert(directory_entry);
+   // assert(directory_entry);
+   // Drake: write-queue
+   // for onelevel_pcm
+   if(!directory_entry)
+   {
+      // dirty evict from upstream
+      sendDataToDram(address, shmem_msg->getRequester(), shmem_msg->getDataBuf(), now);
+      return;
+   }
 
    DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
 
-   assert(directory_entry->hasSharer(sender));
-   directory_entry->removeSharer(sender);
-   directory_entry->setForwarder(INVALID_CORE_ID);
-   directory_entry->setOwner(INVALID_CORE_ID);
+   // Drake: write-queue
+   // for onelevel_pcm: directory shouldn't have entry
+   if (directory_entry->hasSharer(sender))
+   {
+      // assert(directory_entry->hasSharer(sender));
+      directory_entry->removeSharer(sender);
+      directory_entry->setForwarder(INVALID_CORE_ID);
+      directory_entry->setOwner(INVALID_CORE_ID);
+   }
 
    // could be that this is a FLUSH to force a core with S-state to to write back clean data
    // to avoid a memory access
@@ -1179,10 +1230,15 @@ DramDirectoryCntlr::processWbRepFromL2Cache(core_id_t sender, ShmemMsg* shmem_ms
    DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
 
    //assert(directory_block_info->getDState() == DirectoryState::MODIFIED);
-   assert(directory_entry->hasSharer(sender));
+   // Drake: write-queue
+   // for onelevel_pcm: directory shouldn't have entry
+   if (directory_entry->hasSharer(sender))
+   {
+      assert(directory_entry->hasSharer(sender));
 
-   directory_entry->setOwner(INVALID_CORE_ID);
-   directory_block_info->setDState(DirectoryState::SHARED);
+      directory_entry->setOwner(INVALID_CORE_ID);
+      directory_block_info->setDState(DirectoryState::SHARED);
+   }
 
    if (m_dram_directory_req_queue_list->size(address) != 0)
    {
@@ -1218,9 +1274,7 @@ DramDirectoryCntlr::processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shm
    MYLOG("Start @ %lx", address);
 
    DirectoryEntry* directory_entry = m_dram_directory_cache->getDirectoryEntry(address);
-   assert(directory_entry);
-
-   DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
+   // assert(directory_entry);
 
    SubsecondTime nuca_latency;
    HitWhere::where_t hit_where;
@@ -1229,26 +1283,41 @@ DramDirectoryCntlr::processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shm
    boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, now, m_nuca_cache->getShmemPerfModel(), false);
    if (hit_where == HitWhere::MISS)
    {
-      assert(directory_entry->hasSharer(sender));
-      directory_entry->removeSharer(sender);
-      directory_entry->setForwarder(INVALID_CORE_ID);
-      directory_entry->setOwner(INVALID_CORE_ID);
+      // Drake: write-queue
+      // sanity check for onelevel_pcm
+      if (directory_entry)
+      {
+         DirectoryBlockInfo* directory_block_info = directory_entry->getDirectoryBlockInfo();
 
-      // could be that this is a FLUSH to force a core with S-state to to write back clean data
-      // to avoid a memory access
-      if (directory_entry->getNumSharers() == 0)
-      {
-         directory_block_info->setDState(DirectoryState::UNCACHED);
+         // Drake: write-queue
+         // for onelevel_pcm: directory shouldn't have entry
+         if (directory_entry->hasSharer(sender))
+         {
+            assert(directory_entry->hasSharer(sender));
+            directory_entry->removeSharer(sender);
+            directory_entry->setForwarder(INVALID_CORE_ID);
+            directory_entry->setOwner(INVALID_CORE_ID);
+         }
+
+         // could be that this is a FLUSH to force a core with S-state to to write back clean data
+         // to avoid a memory access
+         if (directory_entry->getNumSharers() == 0)
+         {
+            directory_block_info->setDState(DirectoryState::UNCACHED);
+         }
+         else
+         {
+            assert(directory_block_info->getDState() == DirectoryState::SHARED);
+         }
       }
-      else
-      {
-         assert(directory_block_info->getDState() == DirectoryState::SHARED);
-      }
+
+      // optimize NUCA usage by writing clean evicts into it also
       sendDataToNUCA(address, shmem_msg->getRequester(), shmem_msg->getDataBuf(), now, false);
    }
    else
    {
-      processInvRepFromL2Cache(sender, shmem_msg);
+      // Drake: inclusion
+      // NUCA already has it, we can safely drop
    }
 
    MYLOG("End @ %lx", address);

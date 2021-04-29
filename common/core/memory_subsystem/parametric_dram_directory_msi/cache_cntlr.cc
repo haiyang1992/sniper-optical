@@ -104,6 +104,17 @@ CacheMasterCntlr::createATDs(String name, String configName, core_id_t master_co
    }
 }
 
+// Drake: write-queue
+// For now assume just 4 wqs
+void
+CacheMasterCntlr::createWQs(String name, core_id_t core_id, UInt32 wq_size)
+{
+   for(int i = 0;i<4;++i)
+   {
+      m_write_queue.push_back(new ContentionModel(name + ".wq[" + itostr(i) + "]", core_id, wq_size));
+   }
+}
+
 void
 CacheMasterCntlr::accessATDs(Core::mem_op_t mem_op_type, bool hit, IntPtr address, UInt32 core_num)
 {
@@ -115,6 +126,11 @@ CacheMasterCntlr::~CacheMasterCntlr()
 {
    delete m_cache;
    for(std::vector<ATD*>::iterator it = m_atds.begin(); it != m_atds.end(); ++it)
+   {
+      delete *it;
+   }
+   // Drake: write-queue
+   for(std::vector<ContentionModel*>::iterator it = m_write_queue.begin(); it != m_write_queue.end(); ++it)
    {
       delete *it;
    }
@@ -141,11 +157,16 @@ CacheCntlr::CacheCntlr(MemComponent::component_t mem_component,
    m_coherent(cache_params.coherent),
    m_prefetch_on_prefetch_hit(false),
    m_l1_mshr(cache_params.outstanding_misses > 0),
+   m_has_wq(cache_params.has_wq),
    m_core_id(core_id),
    m_cache_block_size(cache_block_size),
    m_cache_writethrough(cache_params.writethrough),
    m_writeback_time(cache_params.writeback_time),
    m_next_level_read_bandwidth(cache_params.next_level_read_bandwidth),
+   m_next_level_pcm_write_time(cache_params.next_level_pcm_write_time),
+   m_wq_access_time(cache_params.wq_access_time),
+   m_wq_dram_overlap(false),
+   m_ignore_read_latency(false),
    m_shared_cores(cache_params.shared_cores),
    m_user_thread_sem(user_thread_sem),
    m_network_thread_sem(network_thread_sem),
@@ -166,7 +187,7 @@ CacheCntlr::CacheCntlr(MemComponent::component_t mem_component,
    if (isMasterCache())
    {
       /* Master cache */
-      m_master = new CacheMasterCntlr(name, core_id, cache_params.outstanding_misses);
+      m_master = new CacheMasterCntlr(name, core_id, cache_params.outstanding_misses, cache_params.wq_size);
       m_master->m_cache = new Cache(name,
             "perf_model/" + cache_params.configName,
             m_core_id,
@@ -192,6 +213,12 @@ CacheCntlr::CacheCntlr(MemComponent::component_t mem_component,
                m_cache_block_size,
                cache_params.replacement_policy,
                CacheBase::parseAddressHash(cache_params.hash_function));
+      }
+
+      // Drake: write-queue
+      if (m_has_wq)
+      {
+         m_master->createWQs(name, core_id, cache_params.wq_size);
       }
 
       Sim()->getHooksManager()->registerHook(HookType::HOOK_ROI_END, __walkUsageBits, (UInt64)this, HooksManager::ORDER_NOTIFY_PRE);
@@ -237,6 +264,11 @@ CacheCntlr::CacheCntlr(MemComponent::component_t mem_component,
    registerStatsMetric(name, core_id, "snoop-latency", &stats.snoop_latency);
    registerStatsMetric(name, core_id, "qbs-query-latency", &stats.qbs_query_latency);
    registerStatsMetric(name, core_id, "mshr-latency", &stats.mshr_latency);
+   // Drake: write-queue
+   registerStatsMetric(name, core_id, "wq-queue-latency", &stats.wq_queue_latency);
+   registerStatsMetric(name, core_id, "wq-access-latency", &stats.wq_access_latency);
+   registerStatsMetric(name, core_id, "wq-reads", &stats.wq_reads);
+   registerStatsMetric(name, core_id, "wq-read-hits", &stats.wq_read_hits);
    registerStatsMetric(name, core_id, "prefetches", &stats.prefetches);
    for(CacheState::cstate_t state = CacheState::CSTATE_FIRST; state < CacheState::NUM_CSTATE_STATES; state = CacheState::cstate_t(int(state)+1)) {
       registerStatsMetric(name, core_id, String("loads-")+CStateString(state), &stats.loads_state[state]);
@@ -538,6 +570,13 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
          #endif
       }
 
+      // Drake: write-queue
+      m_wq_dram_overlap = false;
+      if (hit_where == HitWhere::DRAM_LOCAL || hit_where == HitWhere::DRAM || hit_where == HitWhere::MISS)
+      {
+         m_wq_dram_overlap = true;
+      }
+
       /* data should now be in next-level cache, go get it */
       SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
       copyDataFromNextLevel(mem_op_type, ca_address, modeled, t_now);
@@ -585,11 +624,90 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
       }
    }
 
+   // Drake: write-queue
+   // Model L1D's wq here if onelevel_pcm (L1D passthrough)
+   m_ignore_read_latency = false;
+   if (m_passthrough && m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough() && m_mem_component == MemComponent::L1_DCACHE)
+   // if (L1 is passthrough) && (L2 is passthrough) && (I am L1D)
+   {
+      // check wq when reading
+      if (hasWQ() && ((mem_op_type == Core::READ) || (mem_op_type == Core::READ_EX)))
+      {
+         if (hasAddrInWQ(ca_address))
+         {
+            m_ignore_read_latency = true;
+            stats.wq_access_latency += m_wq_access_time.getLatency();
+         }
+      }
+      if (hasWQ() && (mem_op_type == Core::WRITE))
+      {
+         SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+         SubsecondTime t_wq_avail = t_now;
+
+         // separate queues for multi-bank PCM LLC
+         UInt32 bank_id = m_master->m_cache->getIndex(ca_address) & 0x3U; // use the 2 LSB bits of index for bank_id
+         // UInt32 bank_id = m_master->m_cache->getIndex(ca_address) >> 14; // use the 2 high bits of index
+         // MYLOG("bank id of (0x%lx): %d", ca_address, bank_id);
+
+         if(!(m_master->m_write_queue[bank_id]->hasFreeSlot(t_now))){
+
+            // Delay until we have a slot
+            t_wq_avail = m_master->m_write_queue[bank_id]->getStartTime(t_now);
+            LOG_ASSERT_ERROR(t_wq_avail >= t_now, "t_wq_avail < t_now");
+            SubsecondTime waiting_time = t_wq_avail - t_now;
+
+            if (m_wq_dram_overlap)
+            {
+               // we'll need to wait for DRAM anyways, so the wq latency can be hidden
+               // hard code the memory latencies for now
+               if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4)))
+               {
+                  waiting_time = SubsecondTime::Zero();
+                  // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+               }
+               else
+               // if DRAM comes back and we are still not done, don't account for DRAM twice
+               {
+                  // MYLOG2("before: %s\n", itostr(waiting_time).c_str());
+                  waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4));
+
+                  // a crude way of protecting against funky Sniper subtraction method that might cause overflow
+                  // since two numbers are really close, just set it to 0.
+                  if (waiting_time > t_wq_avail - t_now)
+                  {
+                     // MYLOG2("before: %s\n", itostr(t_wq_avail - t_now).c_str());
+                     // MYLOG2("middle: %s\n", itostr(SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.37))).c_str());
+                     // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+                     waiting_time = SubsecondTime::Zero();
+                  }
+               }
+               // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+            }
+            getShmemPerfModel()->incrElapsedTime(waiting_time, ShmemPerfModel::_USER_THREAD);
+            stats.wq_queue_latency += waiting_time;
+         }
+         m_master->m_write_queue[bank_id]->getCompletionTime(t_now, m_next_level_pcm_write_time.getLatency(), ca_address);
+
+         if (!m_wq_dram_overlap)
+         {
+            getShmemPerfModel()->incrElapsedTime(m_wq_access_time.getLatency(), ShmemPerfModel::_USER_THREAD);
+            stats.wq_access_latency += m_wq_access_time.getLatency();
+         }
+      }
+   }
+
    accessCache(mem_op_type, ca_address, offset, data_buf, data_length, hit_where == HitWhere::where_t(m_mem_component) && count);
 MYLOG("access done");
 
    SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
    SubsecondTime total_latency = t_now - t_start;
+   // Drake: write-queue
+   // hit in wq
+   if (m_ignore_read_latency)
+   {
+      total_latency = m_wq_access_time.getLatency();
+      hit_where = HitWhere::WRITE_QUEUE;
+   }
 
    // From here on downwards: not long anymore, only stats update so blanket cntrl lock
    {
@@ -883,6 +1001,15 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
             SubsecondTime latency = m_master->mshr[address].t_complete - t_now;
             stats.mshr_latency += latency;
             getMemoryManager()->incrElapsedTime(latency, ShmemPerfModel::_USER_THREAD);
+
+            // Drake: write-queue
+            // This is relevant only if we are using L2 as PCM
+            // WARs and WAWs on a PCM LLC should be delayed
+            if (!m_next_cache_cntlr && !m_passthrough && mem_op_type == Core::WRITE)
+            {
+               getMemoryManager()->incrElapsedTime(m_mem_component, CachePerfModel::PCM_WRITE_CACHE_DATA_AND_TAGS, ShmemPerfModel::_USER_THREAD);
+               m_master->mshr[address].t_complete = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+            }
          }
          else
          {
@@ -1020,7 +1147,8 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
             if (m_passthrough && m_last_remote_hit_where != HitWhere::UNKNOWN)
             {
                // handleMsgFromDramDirectory just provided us with the data. Its source was left in m_last_remote_hit_where
-               hit_where = m_last_remote_hit_where;
+               // we might hit in the wq, set hit_where accordingly
+               hit_where = m_ignore_read_latency ? HitWhere::WRITE_QUEUE : m_last_remote_hit_where;
                m_last_remote_hit_where = HitWhere::UNKNOWN;
             }
          }
@@ -1224,22 +1352,37 @@ CacheCntlr::initiateDirectoryAccess(Core::mem_op_t mem_op_type, IntPtr address, 
    {
       m_shmem_perf->reset(getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD), m_core_id);
 
+      // Drake: write-queue
+      // check in previous level's WQ first
+      m_ignore_read_latency = false;
+      if (mem_op_type == Core::READ || mem_op_type == Core::READ_EX)
+      {
+         for (CacheCntlrList::iterator it = m_master->m_prev_cache_cntlrs.begin(); it != m_master->m_prev_cache_cntlrs.end(); ++it)
+         {
+            if ((*it)->hasAddrInWQ(address))
+            {
+               m_ignore_read_latency = true;
+               break;
+            }
+         }
+      }
+
       /* We're the first one to request this address, send the message to the directory now */
       if (exclusive)
       {
          SharedCacheBlockInfo* cache_block_info = getCacheBlockInfo(address);
          if (cache_block_info && (cache_block_info->getCState() == CacheState::SHARED))
          {
-            processUpgradeReqToDirectory(address, m_shmem_perf, ShmemPerfModel::_USER_THREAD);
+            processUpgradeReqToDirectory(address, m_shmem_perf, ShmemPerfModel::_USER_THREAD, m_ignore_read_latency);
          }
          else
          {
-            processExReqToDirectory(address);
+            processExReqToDirectory(address, m_ignore_read_latency);
          }
       }
       else
       {
-         processShReqToDirectory(address);
+         processShReqToDirectory(address, m_ignore_read_latency);
       }
    }
    else
@@ -1250,7 +1393,7 @@ CacheCntlr::initiateDirectoryAccess(Core::mem_op_t mem_op_type, IntPtr address, 
 }
 
 void
-CacheCntlr::processExReqToDirectory(IntPtr address)
+CacheCntlr::processExReqToDirectory(IntPtr address, bool ignore_read_latency)
 {
    // We need to send a request to the Dram Directory Cache
    MYLOG("EX REQ>%d @ %lx", getHome(address) ,address);
@@ -1266,11 +1409,11 @@ CacheCntlr::processExReqToDirectory(IntPtr address)
          getHome(address) /* receiver */,
          address,
          NULL, 0,
-         HitWhere::UNKNOWN, m_shmem_perf, ShmemPerfModel::_USER_THREAD);
+         HitWhere::UNKNOWN, m_shmem_perf, ShmemPerfModel::_USER_THREAD, ignore_read_latency);
 }
 
 void
-CacheCntlr::processUpgradeReqToDirectory(IntPtr address, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num)
+CacheCntlr::processUpgradeReqToDirectory(IntPtr address, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num, bool ignore_read_latency)
 {
    // We need to send a request to the Dram Directory Cache
    MYLOG("UPGR REQ @ %lx", address);
@@ -1285,11 +1428,11 @@ CacheCntlr::processUpgradeReqToDirectory(IntPtr address, ShmemPerf *perf, ShmemP
          getHome(address) /* receiver */,
          address,
          NULL, 0,
-         HitWhere::UNKNOWN, perf, thread_num);
+         HitWhere::UNKNOWN, perf, thread_num, ignore_read_latency);
 }
 
 void
-CacheCntlr::processShReqToDirectory(IntPtr address)
+CacheCntlr::processShReqToDirectory(IntPtr address, bool ignore_read_latency)
 {
 MYLOG("SH REQ @ %lx", address);
    getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::SH_REQ,
@@ -1298,7 +1441,7 @@ MYLOG("SH REQ @ %lx", address);
          getHome(address) /* receiver */,
          address,
          NULL, 0,
-         HitWhere::UNKNOWN, m_shmem_perf, ShmemPerfModel::_USER_THREAD);
+         HitWhere::UNKNOWN, m_shmem_perf, ShmemPerfModel::_USER_THREAD, ignore_read_latency);
 }
 
 
@@ -1571,6 +1714,63 @@ MYLOG("evicting @%lx", evict_address);
          } else {
             /* Send dirty block to next level cache. Probably we have an evict/victim buffer to do that when we're idle, so ignore timing */
 
+            // Drake: write-queue
+            // Model L1's wq if notomi_nuca_pcm (L1D not passthrough)
+            if (!m_passthrough && hasWQ() && isFirstLevel() && m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough()){
+               SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+               SubsecondTime t_wq_avail = t_now;
+
+               // separate queues for multi-bank PCM LLC
+               UInt32 bank_id = m_master->m_cache->getIndex(evict_address) & 0x3U; // use the 2 LSB bits of index for bank_id
+               // UInt32 bank_id = m_master->m_cache->getIndex(evict_address) >> 14; // use the 2 high bits of index
+               // MYLOG("bank id of (0x%lx): %d", evict_address, bank_id);
+
+               if(!(m_master->m_write_queue[bank_id]->hasFreeSlot(t_now))){
+
+                  // Delay until we have a slot
+                  t_wq_avail = m_master->m_write_queue[bank_id]->getStartTime(t_now);
+                  LOG_ASSERT_ERROR(t_wq_avail >= t_now, "t_wq_avail < t_now");
+                  SubsecondTime waiting_time = t_wq_avail - t_now;
+
+                  if (m_wq_dram_overlap)
+                  {
+                     // we'll need to wait for DRAM anyways, so the wq latency can be hidden
+                     // hard code the memory latencies for now
+                     if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4)))
+                     {
+                        waiting_time = SubsecondTime::Zero();
+                        // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+                     }
+                     else
+                     // if DRAM comes back and we are still not done, don't account for DRAM twice
+                     {
+                        // MYLOG2("before: %s\n", itostr(waiting_time).c_str());
+                        waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4));
+
+                        // a crude way of protecting against funky Sniper subtraction method that might cause overflow
+                        // since two numbers are really close, just set it to 0.
+                        if (waiting_time > t_wq_avail - t_now)
+                        {
+                           // MYLOG2("before: %s\n", itostr(t_wq_avail - t_now).c_str());
+                           // MYLOG2("middle: %s\n", itostr(SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.37))).c_str());
+                           // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+                           waiting_time = SubsecondTime::Zero();
+                        }
+                     }
+                     // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
+                  }
+                  getShmemPerfModel()->incrElapsedTime(waiting_time, ShmemPerfModel::_USER_THREAD);
+                  stats.wq_queue_latency += waiting_time;
+               }
+               m_master->m_write_queue[bank_id]->getCompletionTime(t_now, m_next_level_pcm_write_time.getLatency(), evict_address);
+
+               if (!m_wq_dram_overlap)
+               {
+                  getShmemPerfModel()->incrElapsedTime(m_wq_access_time.getLatency(), ShmemPerfModel::_USER_THREAD);
+                  stats.wq_access_latency += m_wq_access_time.getLatency();
+               }
+            }
+
             // Drake: inclusion
             // should only be here if we are L1 (not LLC in 2+ levels of cache)
 
@@ -1584,7 +1784,7 @@ MYLOG("evicting @%lx", evict_address);
             }
             else
             {
-                // Send straight to the nuca via the DRAM interface
+               // Send straight to the nuca via the DRAM interface
                if (evict_block_info.getCState() == CacheState::MODIFIED){
                   MYLOG("evict FLUSH %lx", evict_address);
                   getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::FLUSH_REP,
@@ -1785,6 +1985,8 @@ CacheCntlr::updateCacheBlock(IntPtr address, CacheState::cstate_t new_cstate, Tr
             is_writeback = true;
             sibling_hit = true;
 
+            // Drake: write-queue
+            // no eviction, no need for wq
          } else if (out_buf) {
             /* someone (presumably the directory interfacing code) is waiting to consume the data */
             retrieveCacheBlock(address, out_buf, thread_num, false);
@@ -1969,7 +2171,9 @@ MYLOG("WB REQ<%u @ %lx", sender, address);
          || (shmem_msg_type == PrL1PrL2DramDirectoryMSI::ShmemMsg::UPGRADE_REP) )
    {
       getLock().acquire(); // Keep lock when handling m_directory_waiters
-      while(! m_master->m_directory_waiters.empty(address)) {
+      // Drake: write-queue
+      // race condition fix for onelevel_pcm:
+      // while(! m_master->m_directory_waiters.empty(address)) {
          CacheDirectoryWaiter* request = m_master->m_directory_waiters.front(address);
          getLock().release();
 
@@ -2021,7 +2225,7 @@ MYLOG("wakeup user #%u", request->cache_cntlr->m_core_id);
          MYLOG("about to dequeue request (%p) for address %lx", m_master->m_directory_waiters.front(address), address );
          m_master->m_directory_waiters.dequeue(address);
          delete request;
-      }
+      // }
       getLock().release();
 MYLOG("woke up all");
    }
@@ -2261,6 +2465,31 @@ MYLOG("processWbReqFromDramDirectory l%d", m_mem_component);
    }
 }
 
+// Drake: write-queue
+// checks if a CacheCntlr has an address in its wq, returns false if the addr doesn't exist or if there is no wq
+bool
+CacheCntlr::hasAddrInWQ(IntPtr address)
+{
+   if (!hasWQ()) return false;
+
+   // separate queues for multi-bank PCM LLC
+   UInt32 bank_id = m_master->m_cache->getIndex(address) & 0x3U; // use the 2 LSB bits of index for bank_id
+   // UInt32 bank_id = m_master->m_cache->getIndex(address) >> 14; // use the 2 high bits of index
+
+   SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
+   SubsecondTime t_completed = m_master->m_write_queue[bank_id]->getTagCompletionTime(address);
+
+   bool ret = false;
+   if (t_completed != SubsecondTime::MaxTime() && t_completed > t_now) // Still in flight, we have a hit
+   {
+      ret = true;
+      ++stats.wq_read_hits;
+   }
+   ++stats.wq_reads;
+
+   getShmemPerfModel()->incrElapsedTime(m_wq_access_time.getLatency(), ShmemPerfModel::_USER_THREAD);
+   return ret;
+}
 
 
 /*****************************************************************************

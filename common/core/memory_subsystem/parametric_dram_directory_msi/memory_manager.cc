@@ -128,7 +128,9 @@ MemoryManager::MemoryManager(Core* core,
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/data_access_time", core->getId())),
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/tags_access_time", core->getId())),
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/pcm_write_time", core->getId())),
+            ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/next_level_pcm_write_time", core->getId())),
             ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/writeback_time", core->getId())),
+            ComponentLatency(clock_domain, Sim()->getCfg()->getIntArray("perf_model/" + configName + "/wq_access_time", core->getId())),
             ComponentBandwidthPerCycle(clock_domain,
                i < (UInt32)m_last_level_cache
                   ? Sim()->getCfg()->getIntArray("perf_model/" + configName + "/next_level_read_bandwidth", core->getId())
@@ -139,7 +141,9 @@ MemoryManager::MemoryManager(Core* core,
             Sim()->getCfg()->getStringArray("perf_model/" + configName + "/prefetcher", core->getId()),
             i == MemComponent::L1_DCACHE
                ? Sim()->getCfg()->getIntArray(   "perf_model/" + configName + "/outstanding_misses", core->getId())
-               : 0
+               : 0,
+            Sim()->getCfg()->getBoolArray(   "perf_model/" + configName + "/has_wq", core->getId()),
+            Sim()->getCfg()->getIntArray(   "perf_model/" + configName + "/wq_size", core->getId())
          );
          cache_names[(MemComponent::component_t)i] = objectName;
 
@@ -164,7 +168,11 @@ MemoryManager::MemoryManager(Core* core,
             ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/data_access_time", core->getId())),
             ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/tags_access_time", core->getId())),
             ComponentLatency(global_domain, Sim()->getCfg()->getIntArray("perf_model/nuca/pcm_write_time", core->getId())),
-            ComponentLatency(global_domain, 0), ComponentBandwidthPerCycle(global_domain, 0), "", false, 0, "", 0 // unused
+            ComponentLatency(global_domain, 0), // next_level_pcm_write_time is 0 since there is no next level for NUCA
+            ComponentLatency(global_domain, 0),
+            ComponentLatency(global_domain, 0), // no wq inside NUCA for now
+            ComponentBandwidthPerCycle(global_domain, 0), "", false, 0, "", 0, // unused
+            false, 0 // no wq inside NUCA for now
          );
       }
 
@@ -539,12 +547,15 @@ MYLOG("end");
 }
 
 void
-MemoryManager::sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte* data_buf, UInt32 data_length, HitWhere::where_t where, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num)
+MemoryManager::sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::msg_t msg_type, MemComponent::component_t sender_mem_component, MemComponent::component_t receiver_mem_component, core_id_t requester, core_id_t receiver, IntPtr address, Byte* data_buf, UInt32 data_length, HitWhere::where_t where, ShmemPerf *perf, ShmemPerfModel::Thread_t thread_num, bool ignore_read_latency)
 {
 MYLOG("send msg %u %ul%u > %ul%u", msg_type, requester, sender_mem_component, receiver, receiver_mem_component);
    assert((data_buf == NULL) == (data_length == 0));
    PrL1PrL2DramDirectoryMSI::ShmemMsg shmem_msg(msg_type, sender_mem_component, receiver_mem_component, requester, address, data_buf, data_length, perf);
    shmem_msg.setWhere(where);
+
+   // Drake: write-queue
+   shmem_msg.setIgnoreReadLatency(ignore_read_latency);
 
    Byte* msg_buf = shmem_msg.makeMsgBuf();
    SubsecondTime msg_time = getShmemPerfModel()->getElapsedTime(thread_num);

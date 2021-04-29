@@ -109,6 +109,20 @@ ContentionModel::hasTag(UInt64 tag)
    return false;
 }
 
+// Drake: write-queue
+void
+ContentionModel::removeTag(UInt64 tag)
+{
+   for (UInt32 i = 0; i < m_num_outstanding; ++i)
+   {
+      if (m_time[i].second == tag)
+      {
+         m_time[i].first = SubsecondTime::Zero();
+         m_time[i].second = 0;
+      }
+   }
+}
+
 uint64_t
 ContentionModel::getBarrierCompletionTime(uint64_t t_start, uint64_t t_delay, UInt64 tag)
 {

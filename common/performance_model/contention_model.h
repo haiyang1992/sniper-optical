@@ -37,6 +37,9 @@ class ContentionModel {
       bool hasFreeSlot(SubsecondTime t_start, UInt64 tag = -1);
       bool hasFreeSlot(uint64_t t_start, UInt64 tag = -1);
       bool hasTag(UInt64 tag);
+
+      // Drake: write-queue
+      void removeTag(UInt64 tag);
 };
 
 #endif // CONTENTION_MODEL_H

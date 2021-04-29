@@ -66,6 +66,9 @@ class Cache : public CacheBase
       void updateCounters(bool cache_hit);
       void updateHits(Core::mem_op_t mem_op_type, UInt64 hits);
 
+      // Drake: write-queue
+      UInt32 getIndex(IntPtr addr);
+
       void enable() { m_enabled = true; }
       void disable() { m_enabled = false; }
 };
