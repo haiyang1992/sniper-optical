@@ -47,7 +47,7 @@ namespace PrL1PrL2DramDirectoryMSI
       m_data_buf(shmem_msg->getDataBuf()),
       m_data_length(shmem_msg->getDataLength()),
       m_perf(shmem_msg->getPerf()),
-      m_ignore_read_latency(false)
+      m_ignore_read_latency(shmem_msg->getIgnoreReadLatency())
    {}
 
    ShmemMsg::~ShmemMsg()
