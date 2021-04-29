@@ -636,7 +636,6 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
          if (hasAddrInWQ(ca_address))
          {
             m_ignore_read_latency = true;
-            stats.wq_access_latency += m_wq_access_time.getLatency();
          }
       }
       if (hasWQ() && (mem_op_type == Core::WRITE))
@@ -702,11 +701,16 @@ MYLOG("access done");
    SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);
    SubsecondTime total_latency = t_now - t_start;
    // Drake: write-queue
-   // hit in wq
+   // hit in wq (onelevel_pcm)
    if (m_ignore_read_latency)
    {
       total_latency = m_wq_access_time.getLatency();
       hit_where = HitWhere::WRITE_QUEUE;
+   }
+   // hit in wq (notomi_nuca_pcm)
+   else if (!m_passthrough && m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough() && hit_where == HitWhere::WRITE_QUEUE)
+   {
+      total_latency = m_wq_access_time.getLatency();
    }
 
    // From here on downwards: not long anymore, only stats update so blanket cntrl lock
@@ -2487,6 +2491,7 @@ CacheCntlr::hasAddrInWQ(IntPtr address)
    ++stats.wq_reads;
 
    getShmemPerfModel()->incrElapsedTime(m_wq_access_time.getLatency(), ShmemPerfModel::_USER_THREAD);
+   stats.wq_access_latency += m_wq_access_time.getLatency();
    return ret;
 }
 
