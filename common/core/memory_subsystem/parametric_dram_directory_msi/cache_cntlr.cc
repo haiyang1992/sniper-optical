@@ -1147,8 +1147,7 @@ CacheCntlr::processShmemReqFromPrevCache(CacheCntlr* requester, Core::mem_op_t m
             if (m_passthrough && m_last_remote_hit_where != HitWhere::UNKNOWN)
             {
                // handleMsgFromDramDirectory just provided us with the data. Its source was left in m_last_remote_hit_where
-               // we might hit in the wq, set hit_where accordingly
-               hit_where = m_ignore_read_latency ? HitWhere::WRITE_QUEUE : m_last_remote_hit_where;
+               hit_where = m_last_remote_hit_where;
                m_last_remote_hit_where = HitWhere::UNKNOWN;
             }
          }
