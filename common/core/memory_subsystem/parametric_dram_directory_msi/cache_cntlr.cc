@@ -31,6 +31,12 @@ Lock iolock;
 #  define MYLOG(...) {}
 #endif
 
+// Drake:
+// Number of WQs
+#define NUM_WQ 4
+// Memory latency
+#define MEM_LATENCY 49.4
+
 namespace ParametricDramDirectoryMSI
 {
 
@@ -109,7 +115,7 @@ CacheMasterCntlr::createATDs(String name, String configName, core_id_t master_co
 void
 CacheMasterCntlr::createWQs(String name, core_id_t core_id, UInt32 wq_size)
 {
-   for(int i = 0;i<4;++i)
+   for(int i = 0;i<NUM_WQ;++i)
    {
       m_write_queue.push_back(new ContentionModel(name + ".wq[" + itostr(i) + "]", core_id, wq_size));
    }
@@ -659,7 +665,7 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
             {
                // we'll need to wait for DRAM anyways, so the wq latency can be hidden
                // hard code the memory latencies for now
-               if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4)))
+               if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(MEM_LATENCY)))
                {
                   waiting_time = SubsecondTime::Zero();
                   // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
@@ -668,7 +674,7 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
                // if DRAM comes back and we are still not done, don't account for DRAM twice
                {
                   // MYLOG2("before: %s\n", itostr(waiting_time).c_str());
-                  waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4));
+                  waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(MEM_LATENCY));
 
                   // a crude way of protecting against funky Sniper subtraction method that might cause overflow
                   // since two numbers are really close, just set it to 0.
@@ -1739,7 +1745,7 @@ MYLOG("evicting @%lx", evict_address);
                   {
                      // we'll need to wait for DRAM anyways, so the wq latency can be hidden
                      // hard code the memory latencies for now
-                     if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4)))
+                     if (waiting_time <= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(MEM_LATENCY)))
                      {
                         waiting_time = SubsecondTime::Zero();
                         // MYLOG2("after: %s\n", itostr(waiting_time).c_str());
@@ -1748,7 +1754,7 @@ MYLOG("evicting @%lx", evict_address);
                      // if DRAM comes back and we are still not done, don't account for DRAM twice
                      {
                         // MYLOG2("before: %s\n", itostr(waiting_time).c_str());
-                        waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(49.4));
+                        waiting_time -= SubsecondTime::FS() * static_cast<uint64_t>(TimeConverter<float>::NStoFS(MEM_LATENCY));
 
                         // a crude way of protecting against funky Sniper subtraction method that might cause overflow
                         // since two numbers are really close, just set it to 0.
