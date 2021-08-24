@@ -33,6 +33,7 @@ def build_itemlist(use_simple_sync = False, use_simple_mem = True):
           'DataCacheL1I', 'InstructionCacheL1I', 'InstructionCacheL1', 'InstructionCacheL1_S',
           'InstructionCacheL2', 'InstructionCacheL2_S', 'InstructionCacheL3', 'InstructionCacheL3_S',
           'InstructionCacheL4',  'InstructionCacheL4_S', 'InstructionCachemiss', 'InstructionCache????',
+          'InstructionCachewrite-queue',
           'InstructionCachenuca-cache', 'InstructionCachedram-cache', 'InstructionCachedram',
           'InstructionCachedram-remote', 'InstructionCachecache-remote', 'InstructionCachedram-local',
           'InstructionCachepredicate-false', 'InstructionCacheprefetch-no-mapping', 'InstructionCacheunknown') ],
