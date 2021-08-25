@@ -823,7 +823,9 @@ DramDirectoryCntlr::processDRAMReply(core_id_t sender, ShmemMsg* shmem_msg)
          ShmemPerfModel::_SIM_THREAD);
 
    // Keep a copy in NUCA
-   sendDataToNUCA(address, shmem_req->getShmemMsg()->getRequester(), shmem_msg->getDataBuf(), getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), false);
+   // Drake:
+   // notom+pcm optimization
+   // sendDataToNUCA(address, shmem_req->getShmemMsg()->getRequester(), shmem_msg->getDataBuf(), getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), false);
 
    // Process Next Request
    processNextReqFromL2Cache(address);
