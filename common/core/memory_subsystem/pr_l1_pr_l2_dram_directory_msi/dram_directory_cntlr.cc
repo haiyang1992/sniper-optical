@@ -655,6 +655,9 @@ DramDirectoryCntlr::retrieveDataAndSendToL2Cache(ShmemMsg::msg_t reply_msg_type,
          Byte nuca_data_buf[getCacheBlockSize()];
 
          // determine if we want to ignore read latency because we had a hit in the write queue
+         // onelevel: or if a processor write, ignore miss counter in nuca
+         // if (orig_shmem_msg->getIgnoreReadLatency() || orig_shmem_msg->getMsgType() == ShmemMsg::EX_REQ)
+         // orig/notomi+pcm
          if (orig_shmem_msg->getIgnoreReadLatency())
          {
             boost::tie(nuca_latency, hit_where) = m_nuca_cache->read(address, nuca_data_buf, getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), m_nuca_cache->getShmemPerfModel(), false);
@@ -733,6 +736,8 @@ DramDirectoryCntlr::retrieveDataAndSendToL2Cache(ShmemMsg::msg_t reply_msg_type,
       core_id_t dram_node = m_dram_controller_home_lookup->getHome(address);
 
       MYLOG("Sending request to DRAM for the data");
+      // drake:
+      // onelevel: write-miss caused reading shouldn't be delayed as in reality there is no dram->llc traffic
       getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::DRAM_READ_REQ,
             MemComponent::TAG_DIR, MemComponent::DRAM,
             receiver /* requester */,
@@ -740,7 +745,10 @@ DramDirectoryCntlr::retrieveDataAndSendToL2Cache(ShmemMsg::msg_t reply_msg_type,
             address,
             NULL, 0,
             HitWhere::UNKNOWN,
+            // orig
             orig_shmem_msg->getPerf(),
+            // onelevel
+            // orig_shmem_msg->getMsgType() == ShmemMsg::EX_REQ ? &m_dummy_shmem_perf : orig_shmem_msg->getPerf(),
             ShmemPerfModel::_SIM_THREAD);
    }
    MYLOG("End @ %lx", address);
@@ -770,6 +778,7 @@ DramDirectoryCntlr::processDRAMReply(core_id_t sender, ShmemMsg* shmem_msg)
 
    updateShmemPerf(shmem_req, ShmemPerf::TD_ACCESS);
 
+   bool processor_read = true;
    switch(shmem_req->getShmemMsg()->getMsgType())
    {
       case ShmemMsg::SH_REQ:
@@ -786,11 +795,13 @@ DramDirectoryCntlr::processDRAMReply(core_id_t sender, ShmemMsg* shmem_msg)
       case ShmemMsg::EX_REQ:
          reply_msg_type = ShmemMsg::EX_REP;
          assert(curr_dstate == DirectoryState::MODIFIED);
+         processor_read = false;
          break;
       case ShmemMsg::UPGRADE_REQ:
       {
          // if we had to get the data from DRAM, nobody has it anymore: send EX_REP
          reply_msg_type = ShmemMsg::EX_REP;
+         processor_read = false;
          break;
       }
       default:
@@ -823,9 +834,10 @@ DramDirectoryCntlr::processDRAMReply(core_id_t sender, ShmemMsg* shmem_msg)
          ShmemPerfModel::_SIM_THREAD);
 
    // Keep a copy in NUCA
+   // MYLOG("allocate is %d", processor_read);
    // Drake:
    // notom+pcm optimization
-   // sendDataToNUCA(address, shmem_req->getShmemMsg()->getRequester(), shmem_msg->getDataBuf(), getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), false);
+   // sendDataToNUCA(address, shmem_req->getShmemMsg()->getRequester(), shmem_msg->getDataBuf(), getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD), false, processor_read);
 
    // Process Next Request
    processNextReqFromL2Cache(address);
@@ -1314,7 +1326,7 @@ DramDirectoryCntlr::processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shm
       }
 
       // optimize NUCA usage by writing clean evicts into it also
-      sendDataToNUCA(address, shmem_msg->getRequester(), shmem_msg->getDataBuf(), now, false);
+      sendDataToNUCA(address, shmem_msg->getRequester(), shmem_msg->getDataBuf(), now, true, true);
    }
    else
    {
@@ -1326,7 +1338,7 @@ DramDirectoryCntlr::processCleanEvictFromL2Cache(core_id_t sender, ShmemMsg* shm
 }
 
 void
-DramDirectoryCntlr::sendDataToNUCA(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now, bool count)
+DramDirectoryCntlr::sendDataToNUCA(IntPtr address, core_id_t requester, Byte* data_buf, SubsecondTime now, bool count, bool processor_read)
 {
    if (m_nuca_cache)
    {
@@ -1338,7 +1350,7 @@ DramDirectoryCntlr::sendDataToNUCA(IntPtr address, core_id_t requester, Byte* da
          address, data_buf,
          eviction, evict_address, evict_buf,
          getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_SIM_THREAD),
-         count
+         count, processor_read
       );
 
       if (eviction)
@@ -1369,7 +1381,10 @@ DramDirectoryCntlr::sendDataToDram(IntPtr address, core_id_t requester, Byte* da
    {
       // If we have a NUCA cache: write it there, it will be written to DRAM on eviction
 
-      sendDataToNUCA(address, requester, data_buf, now, true);
+      //onelevel:
+      // sendDataToNUCA(address, requester, data_buf, now, true, false);
+      //notomi
+      sendDataToNUCA(address, requester, data_buf, now, true, true);
    }
    else
    {

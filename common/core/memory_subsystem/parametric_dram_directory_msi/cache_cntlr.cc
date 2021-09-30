@@ -654,6 +654,16 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
          // UInt32 bank_id = m_master->m_cache->getIndex(ca_address) >> 14; // use the 2 high bits of index
          // MYLOG("bank id of (0x%lx): %d", ca_address, bank_id);
 
+         bool nuca_hit;
+         if (hit_where == HitWhere::DRAM_LOCAL || hit_where == HitWhere::DRAM || hit_where == HitWhere::MISS)
+         {
+            nuca_hit = false;
+         }
+         else
+         {
+            nuca_hit = true;
+         }
+
          if(!(m_master->m_write_queue[bank_id]->hasFreeSlot(t_now))){
 
             // Delay until we have a slot
@@ -691,7 +701,9 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
             getShmemPerfModel()->incrElapsedTime(waiting_time, ShmemPerfModel::_USER_THREAD);
             stats.wq_queue_latency += waiting_time;
          }
-         m_master->m_write_queue[bank_id]->getCompletionTime(t_now, m_next_level_pcm_write_time.getLatency(), ca_address);
+         // m_master->m_write_queue[bank_id]->getCompletionTime(t_now, m_next_level_pcm_write_time.getLatency(), ca_address);
+         // Onelevel opt: write miss does not allocate, write hit invalidates block and writes in dram
+         m_master->m_write_queue[bank_id]->getCompletionTime(t_now, nuca_hit ? m_wq_access_time.getLatency() : SubsecondTime::Zero(), ca_address);
 
          if (!m_wq_dram_overlap)
          {
@@ -700,8 +712,22 @@ MYLOG("processMemOpFromCore l%d after next fill", m_mem_component);
          }
       }
    }
-
    accessCache(mem_op_type, ca_address, offset, data_buf, data_length, hit_where == HitWhere::where_t(m_mem_component) && count);
+   // Drake:
+   // onelevel_pcm:
+   // actually send it to NUCA for one level
+   if (m_passthrough && m_next_cache_cntlr && m_next_cache_cntlr->isPassthrough() && m_mem_component == MemComponent::L1_DCACHE && mem_op_type == Core::WRITE && data_buf)
+   {
+      MYLOG("Core write %lx to nuca", ca_address);
+      getMemoryManager()->sendMsg(PrL1PrL2DramDirectoryMSI::ShmemMsg::FLUSH_REP,
+         MemComponent::LAST_LEVEL_CACHE, MemComponent::TAG_DIR,
+         m_core_id /* requester */,
+         getHome(ca_address) /* receiver */,
+         ca_address,
+         data_buf, getCacheBlockSize(),
+         HitWhere::UNKNOWN, &m_dummy_shmem_perf, ShmemPerfModel::_SIM_THREAD);
+   }
+
 MYLOG("access done");
 
    SubsecondTime t_now = getShmemPerfModel()->getElapsedTime(ShmemPerfModel::_USER_THREAD);

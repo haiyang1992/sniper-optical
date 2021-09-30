@@ -76,7 +76,7 @@ class NucaCache
       ~NucaCache();
 
       boost::tuple<SubsecondTime, HitWhere::where_t> read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *perf, bool count);
-      boost::tuple<SubsecondTime, HitWhere::where_t> write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count);
+      boost::tuple<SubsecondTime, HitWhere::where_t> write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count, bool allocate);
 
       // Drake: inclusion
       ShmemPerf* getShmemPerfModel(){ return &m_dummy_shmem_perf; };

@@ -136,11 +136,14 @@ NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *pe
       // {
       //    m_addr_writes[address] = 0;
       // }
+
+      // notomi+pcm opt
+      // block_info->setCState(CacheState::INVALID);
    }
    else
    {
-      // if (count) ++m_read_misses;
-      ++m_read_misses;
+      if (count) ++m_read_misses;
+      // ++m_read_misses;
    }
    if (count) ++m_reads;
 
@@ -149,7 +152,7 @@ NucaCache::read(IntPtr address, Byte* data_buf, SubsecondTime now, ShmemPerf *pe
 }
 
 boost::tuple<SubsecondTime, HitWhere::where_t>
-NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count)
+NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_address, Byte* evict_buf, SubsecondTime now, bool count, bool allocate)
 {
    HitWhere::where_t hit_where = HitWhere::MISS;
 
@@ -158,11 +161,6 @@ NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_a
 
    if (block_info)
    {
-      block_info->setCState(CacheState::MODIFIED);
-      m_cache->accessSingleLine(address, Cache::STORE, data_buf, m_cache_block_size, now + latency, true);
-
-      latency += accessDataArray(Cache::STORE, now + latency, &m_dummy_shmem_perf);
-      hit_where = HitWhere::NUCA_CACHE;
       // Drake:
       // write hit, increment counter
       if (!m_addr_writes.count(address))
@@ -173,67 +171,106 @@ NucaCache::write(IntPtr address, Byte* data_buf, bool& eviction, IntPtr& evict_a
       {
          m_addr_writes[address]++;
       }
+
+      if (allocate) // normal cases of read hit allocation
+      {
+         block_info->setCState(CacheState::MODIFIED);
+         m_cache->accessSingleLine(address, Cache::STORE, data_buf, m_cache_block_size, now + latency, true);
+
+         latency += accessDataArray(Cache::STORE, now + latency, &m_dummy_shmem_perf);
+         hit_where = HitWhere::NUCA_CACHE;
+
+         updateLastOp(address, NucaCache::WRITE);
+      }
+      else // write hit: invalidates block and writes to dram
+      {
+         // pretend as if we have an eviction
+         eviction = true;
+         evict_address = address;
+         memcpy((void*) evict_buf, data_buf, m_cache_block_size);
+         (PrL1CacheBlockInfo*)m_cache->invalidateSingleLine(address);
+         block_info->setCState(CacheState::INVALID);
+         latency += accessDataArray(Cache::STORE, now + latency, &m_dummy_shmem_perf);
+         hit_where = HitWhere::NUCA_CACHE;
+
+         updateLastOp(address, NucaCache::INVALID);
+      }
    }
    else
    {
-      PrL1CacheBlockInfo evict_block_info;
-
-      m_cache->insertSingleLine(address, data_buf,
-         &eviction, &evict_address, &evict_block_info, evict_buf,
-         now + latency);
-
-      if (eviction)
+      if (allocate) // read miss allocation miss
       {
-         updateLastOp(evict_address, NucaCache::INVALID);
-         if (evict_block_info.getCState() != CacheState::MODIFIED)
+         PrL1CacheBlockInfo evict_block_info;
+
+         m_cache->insertSingleLine(address, data_buf,
+            &eviction, &evict_address, &evict_block_info, evict_buf,
+            now + latency);
+
+         if (eviction)
          {
-            // Unless data is dirty, don't have caller write it back
-            eviction = false;
+            updateLastOp(evict_address, NucaCache::INVALID);
+            if (evict_block_info.getCState() != CacheState::MODIFIED)
+            {
+               // Unless data is dirty, don't have caller write it back
+               eviction = false;
+            }
          }
-      }
 
-      // if (count) ++m_write_misses;
-      ++m_write_misses;
+         if (count) ++m_write_misses;
+         // ++m_write_misses;
 
-      // Drake:
-      // write miss, still a write to new block
-      if (!m_addr_writes.count(address))
-      {
-         m_addr_writes[address] = 1;
-      }
-      else
-      {
-         m_addr_writes[address]++;
-      }
-
-      if (evict_address && !evict_block_info.hasOption(CacheBlockInfo::WARMUP))
-      {
-         if (m_addr_writes.count(evict_address))
+         // Drake:
+         // write miss, still a write to new block
+         if (!m_addr_writes.count(address))
          {
-            double reads;
-            if (m_addr_reads.count(evict_address))
-            {
-               reads = (double)(m_addr_reads[address] + 3);
-            }
-            else
-            {
-               reads = 3.0;
-            }
-            double wr_ratio = (double)(2 * m_addr_writes[evict_address]) / reads;
-            m_rw_service_count[m_float_bucket_names[getNearestPower(wr_ratio)]]++;
+            m_addr_writes[address] = 1;
          }
-         // else if (m_addr_reads.count(evict_address))
-         // {
-         //    // zero writes, 2w/(r+3) = 0
-         //    m_rw_service_count[m_bin_bucket_names["0"]]++;
-         // }
-         m_addr_reads.erase(evict_address);
-         m_addr_writes.erase(evict_address);
+         else
+         {
+            m_addr_writes[address]++;
+         }
+
+         if (evict_address && !evict_block_info.hasOption(CacheBlockInfo::WARMUP))
+         {
+            if (m_addr_writes.count(evict_address))
+            {
+               double reads;
+               if (m_addr_reads.count(evict_address))
+               {
+                  reads = (double)(m_addr_reads[address] + 3);
+               }
+               else
+               {
+                  reads = 3.0;
+               }
+               double wr_ratio = (double)(2 * m_addr_writes[evict_address]) / reads;
+               m_rw_service_count[m_float_bucket_names[getNearestPower(wr_ratio)]]++;
+            }
+            // else if (m_addr_reads.count(evict_address))
+            // {
+            //    // zero writes, 2w/(r+3) = 0
+            //    m_rw_service_count[m_bin_bucket_names["0"]]++;
+            // }
+            m_addr_reads.erase(evict_address);
+            m_addr_writes.erase(evict_address);
+         }
+
+         updateLastOp(address, NucaCache::WRITE);
+      }
+      else //actual write miss, just write to dram using eviction
+      {
+         eviction = true;
+         evict_address = address;
+         memcpy((void*) evict_buf, data_buf, m_cache_block_size);
+         hit_where = HitWhere::DRAM_LOCAL;
+
+         if (count) ++m_write_misses;
+         // ++m_write_misses;
       }
    }
    if (count) ++m_writes;
 
-   updateLastOp(address, NucaCache::WRITE);
+   // if (!allocate) updateLastOp(address, NucaCache::WRITE);
    return boost::tuple<SubsecondTime, HitWhere::where_t>(latency, hit_where);
 }
 
